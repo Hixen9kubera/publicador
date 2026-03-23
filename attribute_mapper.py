@@ -679,7 +679,7 @@ def build_attributes(ml_attrs: dict, ml_required: list, wc_attrs: dict = None) -
                 # Acepta texto libre
                 val_str = str(value).strip()
                 if attr.get('value_type') == 'number_unit':
-                    formatted = _format_number_unit(val_str, attr.get('default_unit', ''))
+                    formatted = _format_number_unit(val_str, attr.get('default_unit', ''), attr.get('allowed_units'))
                     if formatted is None:
                         continue  # texto no numérico para atributo numérico → omitir
                     val_str = formatted
@@ -832,7 +832,7 @@ def build_secondary_attributes(prod: dict, category_attrs: list, existing_ids: s
         else:
             val_str = str(value).strip()
             if attr.get('value_type') == 'number_unit':
-                formatted = _format_number_unit(val_str, attr.get('default_unit', ''))
+                formatted = _format_number_unit(val_str, attr.get('default_unit', ''), attr.get('allowed_units'))
                 if formatted is None:
                     continue  # texto no numérico para atributo numérico → omitir
                 result.append({'id': attr_id, 'value_name': formatted})
@@ -847,11 +847,12 @@ def build_secondary_attributes(prod: dict, category_attrs: list, existing_ids: s
     return result
 
 
-def _format_number_unit(value: str, default_unit: str) -> str | None:
+def _format_number_unit(value: str, default_unit: str, allowed_units: list = None) -> str | None:
     """
     Para atributos de tipo number_unit:
     - Si el valor es un número puro → agrega default_unit
-    - Si el valor ya tiene número + unidad → lo devuelve limpio
+    - Si el valor tiene número + unidad → valida la unidad contra allowed_units;
+      si no es válida, usa default_unit
     - Si el valor NO es un número válido (texto libre) → retorna None (omitir)
     """
     import re
@@ -861,7 +862,12 @@ def _format_number_unit(value: str, default_unit: str) -> str | None:
         num_part = m.group(1).replace(',', '.')
         unit_part = m.group(2).strip()
         if unit_part:
-            return f"{num_part} {unit_part}"
+            # Validar unidad contra allowed_units
+            if allowed_units:
+                valid_ids = {u.get('id', '').lower() for u in allowed_units}
+                if unit_part.lower() not in valid_ids:
+                    unit_part = default_unit  # unidad inválida → usar default
+            return f"{num_part} {unit_part}" if unit_part else num_part
         elif default_unit:
             return f"{num_part} {default_unit}"
         else:
