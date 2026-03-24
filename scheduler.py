@@ -29,7 +29,6 @@ from datetime import datetime
 try:
     from apscheduler.schedulers.blocking import BlockingScheduler
     from apscheduler.triggers.cron       import CronTrigger
-    from apscheduler.triggers.date       import DateTrigger
 except ImportError:
     print("[✗] Falta apscheduler. Instala con: pip install apscheduler")
     sys.exit(1)
@@ -42,7 +41,7 @@ TIMEZONE       = 'America/Mexico_City'
 DEFAULT_HORA   = '13:00'
 
 # Comando que se ejecutará diariamente
-CMD_ARGS = ['--todas-cuentas', '--ready', '--limit', '10']
+CMD_ARGS = ['--todas-cuentas', '--ready', '--limit', '5']
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -125,18 +124,6 @@ def main():
         misfire_grace_time=300,
         coalesce=True,
     )
-
-    # Prueba única a las 12:51 hora México (2026-03-20)
-    from datetime import datetime as _dt
-    from zoneinfo import ZoneInfo as _ZI
-    _prueba = _dt(2026, 3, 20, 12, 51, 0, tzinfo=_ZI(TIMEZONE))
-    scheduler.add_job(
-        run_publisher,
-        trigger=DateTrigger(run_date=_prueba, timezone=TIMEZONE),
-        id='prueba_1251',
-        name='Prueba única 12:51',
-    )
-    log.info(f"  Prueba única programada: 2026-03-20 12:51 hora Mexico")
 
     if args.run_now:
         log.info("  --run-now: ejecutando inmediatamente...")
