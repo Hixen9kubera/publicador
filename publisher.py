@@ -393,6 +393,16 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
                                   if a.get('id') not in ('GTIN', 'EMPTY_GTIN_REASON')]
         response, status_code = ml_api.create_item(payload, token)
 
+    # Retry: SALE_FORMAT=Unidad requiere UNITS_PER_PACK → agregar con valor 1
+    if status_code == 400 and any(
+        c.get('code') == 'item.attribute.invalid_sale_units'
+        for c in response.get('cause', [])
+    ):
+        print(f"  [!] UNITS_PER_PACK requerido — reintentando con valor 1...")
+        payload['attributes'] = [a for a in payload['attributes'] if a.get('id') != 'UNITS_PER_PACK']
+        payload['attributes'].append({'id': 'UNITS_PER_PACK', 'value_name': '1'})
+        response, status_code = ml_api.create_item(payload, token)
+
     # Retry 3: GTIN sigue requerido después del placeholder → publicar sin GTIN
     if status_code == 400 and any(
         c.get('code') == 'item.attribute.missing_conditional_required'

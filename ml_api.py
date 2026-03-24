@@ -177,6 +177,7 @@ def search_gtin_upc(brand: str, query: str) -> str | None:
     return None
 
 
+
 def preupload_picture(image_url: str, token: str) -> str | None:
     """
     Pre-sube una imagen a ML descargandola de la URL y subiendola directamente.
