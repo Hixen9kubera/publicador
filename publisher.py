@@ -344,15 +344,43 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
         time.sleep(15)
         response, status_code = ml_api.create_item(payload, token)
 
-    # Retry 1: si ML exige GTIN → agregar placeholder "0000000000000"
+    # Retry 1: si ML exige GTIN → buscar en catálogo ML, luego UPC Item DB, luego placeholder
     if status_code == 400 and any(
         c.get('code') == 'item.attribute.missing_conditional_required'
         and 'GTIN' in c.get('message', '')
         for c in response.get('cause', [])
     ):
-        print(f"  [!] GTIN requerido por la categoría — reintentando con placeholder...")
+        gtin_found = None
+
+        # Opción 1: buscar en catálogo ML por título+categoría
+        print(f"  [!] GTIN requerido — buscando en catálogo ML...")
+        gtin_found = ml_api.search_gtin_in_catalog(prod['ml_category_id'], prod['title'], token)
+        if gtin_found:
+            print(f"  [gtin] Encontrado en catálogo ML: {gtin_found}")
+
+        # Opción 2: buscar en UPC Item DB por marca+modelo
+        if not gtin_found:
+            brand = prod['ml_attrs'].get('BRAND', '') or prod['meta'].get('marca', '')
+            model = prod['ml_attrs'].get('MODEL', '') or prod['meta'].get('modelo', '')
+            if brand or model:
+                print(f"  [!] No encontrado en ML — buscando en UPC Item DB ({brand} {model})...")
+                gtin_found = ml_api.search_gtin_upc(brand, model)
+                if gtin_found:
+                    print(f"  [gtin] Encontrado en UPC Item DB: {gtin_found}")
+
+        # Opción 3: placeholder
+        if not gtin_found:
+            print(f"  [!] No encontrado — usando placeholder GTIN...")
+            gtin_found = '0000000000000'
+
+        # Si encontramos GTIN real, guardarlo en WC para futuros runs
+        if gtin_found != '0000000000000':
+            from wc_api import save_gtin_to_wc
+            if save_gtin_to_wc(prod['wc_id'], gtin_found):
+                print(f"  [gtin] Guardado en WooCommerce (_barcode)")
+
         payload['attributes'] = [a for a in payload['attributes'] if a.get('id') != 'GTIN']
-        payload['attributes'].append({'id': 'GTIN', 'value_name': '0000000000000'})
+        payload['attributes'].append({'id': 'GTIN', 'value_name': gtin_found})
         response, status_code = ml_api.create_item(payload, token)
 
     # Retry 2: si el placeholder fue rechazado por formato inválido → quitar todo GTIN
@@ -635,6 +663,9 @@ def main():
             if prog_key in ya_publicados or sku in ya_publicados:
                 print(f"\n  [{idx}/{len(products)}] {sku} — ya publicado en {cuenta}, saltando")
                 stats['saltados'] += 1
+                # Registrar wc_id para verificar al final si todas las cuentas ya publicaron
+                wc_id_por_sku[sku] = prod['wc_id']
+                exitosos_por_sku.setdefault(sku, set()).add(cuenta)
                 continue
 
             print(f"\n  [{idx}/{len(products)}]", end='')
@@ -671,19 +702,28 @@ def main():
                 print(f"\n  Esperando {args.delay}s antes del siguiente...")
                 time.sleep(args.delay)
 
-    # Actualizar WC a 'publish' solo si TODAS las cuentas publicaron ese SKU
+    # Actualizar WC a 'publish' si TODAS las cuentas publicaron ese SKU
+    # Combina éxitos del run actual + historial en BD (para runs previos)
     cuentas_set = set(cuentas)
-    for sku, cuentas_ok in exitosos_por_sku.items():
-        if not args.dry_run:
-            if cuentas_ok >= cuentas_set:
-                wc_ok = update_product_status(wc_id_por_sku[sku], 'publish')
-                if wc_ok:
-                    print(f"  [✓] {sku} → WooCommerce 'publish' (todas las cuentas OK)")
-                else:
-                    print(f"  [!] {sku} → no se pudo actualizar WC a 'publish'")
+    skus_a_verificar = set(exitosos_por_sku.keys()) | set(wc_id_por_sku.keys())
+    for sku in skus_a_verificar:
+        if args.dry_run:
+            continue
+        # Éxitos del run actual
+        cuentas_ok = exitosos_por_sku.get(sku, set()).copy()
+        # Sumar éxitos de runs anteriores desde la BD
+        for c in cuentas_set - cuentas_ok:
+            if db.is_published(c, sku):
+                cuentas_ok.add(c)
+        if cuentas_ok >= cuentas_set:
+            wc_ok = update_product_status(wc_id_por_sku[sku], 'publish')
+            if wc_ok:
+                print(f"  [✓] {sku} → WooCommerce 'publish' (todas las cuentas OK)")
             else:
-                faltantes = cuentas_set - cuentas_ok
-                print(f"  [~] {sku} → WC sigue en 'ready' (pendiente en: {', '.join(faltantes)})")
+                print(f"  [!] {sku} → no se pudo actualizar WC a 'publish'")
+        else:
+            faltantes = cuentas_set - cuentas_ok
+            print(f"  [~] {sku} → WC sigue en 'ready' (pendiente en: {', '.join(faltantes)})")
 
     # Resumen final
     print(f"\n{'='*60}")

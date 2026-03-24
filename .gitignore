@@ -1,0 +1,14 @@
+# Credenciales y tokens — NUNCA subir
+config/meli_tokens.json
+.env
+
+# Datos de progreso y backlogs — locales por máquina
+data/
+
+# Logs del scheduler
+data/scheduler.log
+
+# Archivos temporales Python
+__pycache__/
+*.pyc
+*.pyo

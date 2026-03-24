@@ -397,6 +397,9 @@ WC_TO_ML_ID: dict[str, str] = {
     'capacidad en peso':                    'WEIGHT_CAPACITY',       # 10 usos en WC
     'capacidad maxima':                     'MAXIMUM_CAPACITY',
     'capacidad máxima':                     'MAXIMUM_CAPACITY',
+    'capacidad maxima de personas':         'MAX_PEOPLE_CAPACITY',
+    'capacidad máxima de personas':         'MAX_PEOPLE_CAPACITY',
+    'capacidad de personas':                'MAX_PEOPLE_CAPACITY',
     'capacidad de almacenamiento':          'STORAGE_CAPACITY',
     'capacidad de llenado':                 'FILL_CAPACITY',
     'tamano':                               'SIZE',
@@ -823,12 +826,9 @@ def build_secondary_attributes(prod: dict, category_attrs: list, existing_ids: s
             matched_id = _find_value_id(str(value), allowed_vals)
             if matched_id:
                 result.append({'id': attr_id, 'value_id': matched_id})
-            elif attr_id in ('MAIN_COLOR', 'COLOR', 'HOUSING_COLOR', 'LIGHT_COLOR'):
-                # Colores con lista restringida: solo enviar si hay value_id válido
-                pass
             else:
-                # Sin match exacto → enviar value_name libre (ML lo sugiere o ignora)
-                result.append({'id': attr_id, 'value_name': _resolve_fraction(str(value))})
+                # Sin match en allowed_vals → omitir (ML rechaza value_name para attrs con lista)
+                pass
         else:
             val_str = str(value).strip()
             if attr.get('value_type') == 'number_unit':

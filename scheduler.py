@@ -29,6 +29,7 @@ from datetime import datetime
 try:
     from apscheduler.schedulers.blocking import BlockingScheduler
     from apscheduler.triggers.cron       import CronTrigger
+    from apscheduler.triggers.date       import DateTrigger
 except ImportError:
     print("[✗] Falta apscheduler. Instala con: pip install apscheduler")
     sys.exit(1)
@@ -41,7 +42,7 @@ TIMEZONE       = 'America/Mexico_City'
 DEFAULT_HORA   = '13:00'
 
 # Comando que se ejecutará diariamente
-CMD_ARGS = ['--todas-cuentas', '--ready','--limit 10']
+CMD_ARGS = ['--todas-cuentas', '--ready', '--limit', '10']
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -88,7 +89,7 @@ def run_publisher():
     except Exception as e:
         log.error(f"  [✗] Error ejecutando publisher: {e}")
 
-    log.info(f"  Próxima ejecución: mañana a las {DEFAULT_HORA} (hora México)")
+    log.info(f"  Próxima ejecución: a la siguiente hora en punto (hora México)")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -109,28 +110,39 @@ def main():
     log.info("=" * 60)
     log.info("  SCHEDULER KUBERA — WooCommerce → MercadoLibre")
     log.info("=" * 60)
-    log.info(f"  Ejecución:         Lunes a Viernes — 13:00, 14:00 y 15:00 hrs (hora México)")
+    log.info(f"  Ejecución:         Cada hora en punto (todos los días, hora México)")
     log.info(f"  Comando:           publisher.py {' '.join(CMD_ARGS)}")
     log.info(f"  PID:               {os.getpid()}")
     log.info("=" * 60)
 
     scheduler = BlockingScheduler(timezone=TIMEZONE)
-    # Lunes a viernes (day_of_week='mon-fri') a las 13:00, 14:00 y 15:00
-    for slot_hora, slot_id in [('13', 'publisher_13'), ('14', 'publisher_14'), ('15', 'publisher_15')]:
-        scheduler.add_job(
-            run_publisher,
-            trigger=CronTrigger(day_of_week='mon-fri', hour=int(slot_hora), minute=0, timezone=TIMEZONE),
-            id=slot_id,
-            name=f'Publisher WC->ML {slot_hora}:00 L-V',
-            misfire_grace_time=300,
-            coalesce=True,
-        )
+    # Cada hora, todos los días
+    scheduler.add_job(
+        run_publisher,
+        trigger=CronTrigger(minute=0, timezone=TIMEZONE),
+        id='publisher_cada_hora',
+        name='Publisher WC->ML cada hora',
+        misfire_grace_time=300,
+        coalesce=True,
+    )
+
+    # Prueba única a las 12:51 hora México (2026-03-20)
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _ZI
+    _prueba = _dt(2026, 3, 20, 12, 51, 0, tzinfo=_ZI(TIMEZONE))
+    scheduler.add_job(
+        run_publisher,
+        trigger=DateTrigger(run_date=_prueba, timezone=TIMEZONE),
+        id='prueba_1251',
+        name='Prueba única 12:51',
+    )
+    log.info(f"  Prueba única programada: 2026-03-20 12:51 hora Mexico")
 
     if args.run_now:
         log.info("  --run-now: ejecutando inmediatamente...")
         run_publisher()
 
-    log.info(f"\n  Scheduler activo. Disparos: L-V a las 13:00, 14:00 y 15:00 hrs")
+    log.info(f"\n  Scheduler activo. Disparos: cada hora en punto")
     log.info("  Ctrl+C para detener.\n")
 
     try:

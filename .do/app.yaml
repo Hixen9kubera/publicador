@@ -1,0 +1,43 @@
+name: kubera-publisher
+region: nyc
+
+workers:
+  - name: publisher-scheduler
+    source_dir: kubera_costos-main/publicaciones_ready
+    github:
+      repo: Hixen9kubera/Actualizaciones-Kubera
+      branch: main
+      deploy_on_push: true
+    run_command: python scheduler.py
+    instance_size_slug: basic-xxs
+    instance_count: 1
+    envs:
+      # ── WooCommerce ─────────────────────────────────────────────
+      - key: WC_URL
+        value: "https://chunche.shop"
+      - key: WC_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: WC_SECRET
+        scope: RUN_TIME
+        type: SECRET
+      # ── Base de datos ────────────────────────────────────────────
+      - key: DB_HOST
+        value: "srv742.hstgr.io"
+      - key: DB_PORT
+        value: "3306"
+      - key: DB_NAME
+        value: "u531713409_kubera_ml"
+      - key: DB_USER
+        scope: RUN_TIME
+        type: SECRET
+      - key: DB_PASSWORD
+        scope: RUN_TIME
+        type: SECRET
+      # ── MercadoLibre tokens (JSON completo) ──────────────────────
+      - key: ML_TOKENS_JSON
+        scope: RUN_TIME
+        type: SECRET
+      # ── Usar BD para progress (no filesystem) ───────────────────
+      - key: USE_DB_PROGRESS
+        value: "1"
