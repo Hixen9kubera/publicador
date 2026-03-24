@@ -202,12 +202,13 @@ def build_payload(prod: dict, token: str, dry_run: bool = False) -> dict | None:
     if 'PART_NUMBER' not in _attr_ids():
         attributes.append({'id': 'PART_NUMBER', 'value_name': prod['sku']})
 
-    # GTIN: solo incluir si el producto tiene uno real en sus atributos.
+    # GTIN: incluir si el producto tiene uno en _barcode (campo manual WC), ml_attrs o _gtin.
     # Si la categoría requiere GTIN (missing_conditional_required), se reintenta
-    # en publish_product con placeholder "0000000000000".
+    # en publish_product con _barcode manual → catálogo ML → UPC Item DB → placeholder.
     if 'GTIN' not in _attr_ids():
-        gtin_val = (prod['ml_attrs'].get('gtin') or prod['ml_attrs'].get('ean')
-                    or prod['ml_attrs'].get('upc') or prod['meta'].get('_gtin'))
+        gtin_val = (prod['meta'].get('_barcode') or prod['ml_attrs'].get('gtin')
+                    or prod['ml_attrs'].get('ean') or prod['ml_attrs'].get('upc')
+                    or prod['meta'].get('_gtin'))
         if gtin_val:
             attributes.append({'id': 'GTIN', 'value_name': str(gtin_val)})
     if 'EMPTY_GTIN_REASON' not in _attr_ids():
@@ -344,7 +345,8 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
         time.sleep(15)
         response, status_code = ml_api.create_item(payload, token)
 
-    # Retry 1: si ML exige GTIN → buscar en catálogo ML, luego UPC Item DB, luego placeholder
+    # Retry 1: si ML exige GTIN → _barcode WC → catálogo ML → UPC Item DB → placeholder
+    # Si el placeholder también falla, el error queda en backlog para revisión manual.
     if status_code == 400 and any(
         c.get('code') == 'item.attribute.missing_conditional_required'
         and 'GTIN' in c.get('message', '')
@@ -352,16 +354,22 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
     ):
         gtin_found = None
 
+        # Opción 0: _barcode ingresado manualmente en WooCommerce
+        gtin_wc = (prod['meta'].get('_barcode') or prod['meta'].get('_gtin') or '').strip()
+        if gtin_wc:
+            gtin_found = gtin_wc
+            print(f"  [gtin] Usando _barcode de WooCommerce: {gtin_found}")
+
         # Opción 1: buscar en catálogo ML por título+categoría
-        print(f"  [!] GTIN requerido — buscando en catálogo ML...")
-        gtin_found = ml_api.search_gtin_in_catalog(prod['ml_category_id'], prod['title'], token)
-        if gtin_found:
-            print(f"  [gtin] Encontrado en catálogo ML: {gtin_found}")
+        if not gtin_found:
+            print(f"  [!] GTIN requerido — buscando en catálogo ML...")
+            gtin_found = ml_api.search_gtin_in_catalog(prod['ml_category_id'], prod['title'], token)
+            if gtin_found:
+                print(f"  [gtin] Encontrado en catálogo ML: {gtin_found}")
 
         # Opción 2: buscar en UPC Item DB por título genérico (sin marca propia)
         if not gtin_found:
             model = prod['ml_attrs'].get('MODEL', '') or prod['meta'].get('modelo', '')
-            # Usar modelo si existe, sino el título (más genérico que marca+modelo)
             query = model if model else prod['title']
             print(f"  [!] No encontrado en ML — buscando en UPC Item DB ({query[:60]})...")
             gtin_found = ml_api.search_gtin_upc('', query)
@@ -383,16 +391,6 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
         payload['attributes'].append({'id': 'GTIN', 'value_name': gtin_found})
         response, status_code = ml_api.create_item(payload, token)
 
-    # Retry 2: si el placeholder fue rechazado por formato inválido → quitar todo GTIN
-    if status_code == 400 and any(
-        'product_identifier.invalid_format' in c.get('code', '')
-        for c in response.get('cause', [])
-    ):
-        print(f"  [!] Placeholder GTIN rechazado — reintentando sin GTIN...")
-        payload['attributes'] = [a for a in payload['attributes']
-                                  if a.get('id') not in ('GTIN', 'EMPTY_GTIN_REASON')]
-        response, status_code = ml_api.create_item(payload, token)
-
     # Retry: SALE_FORMAT=Unidad requiere UNITS_PER_PACK → agregar con valor 1
     if status_code == 400 and any(
         c.get('code') == 'item.attribute.invalid_sale_units'
@@ -401,17 +399,6 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
         print(f"  [!] UNITS_PER_PACK requerido — reintentando con valor 1...")
         payload['attributes'] = [a for a in payload['attributes'] if a.get('id') != 'UNITS_PER_PACK']
         payload['attributes'].append({'id': 'UNITS_PER_PACK', 'value_name': '1'})
-        response, status_code = ml_api.create_item(payload, token)
-
-    # Retry 3: GTIN sigue requerido después del placeholder → publicar sin GTIN
-    if status_code == 400 and any(
-        c.get('code') == 'item.attribute.missing_conditional_required'
-        and 'GTIN' in c.get('message', '')
-        for c in response.get('cause', [])
-    ):
-        print(f"  [!] GTIN sigue requerido — reintentando sin GTIN...")
-        payload['attributes'] = [a for a in payload['attributes']
-                                  if a.get('id') not in ('GTIN', 'EMPTY_GTIN_REASON')]
         response, status_code = ml_api.create_item(payload, token)
 
     if status_code != 201:
