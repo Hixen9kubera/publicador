@@ -150,13 +150,13 @@ def search_gtin_in_catalog(category_id: str, title: str, token: str) -> str | No
     return None
 
 
-def search_gtin_upc(brand: str, model: str) -> str | None:
+def search_gtin_upc(brand: str, query: str) -> str | None:
     """
-    Busca GTIN en UPC Item DB por marca+modelo.
+    Busca GTIN en UPC Item DB por query (título genérico o modelo).
     Retorna el primer EAN/UPC encontrado, o None.
     """
     try:
-        query = f"{brand} {model}".strip()
+        query = f"{brand} {query}".strip() if brand else query.strip()
         resp = requests.get(
             'https://api.upcitemdb.com/prod/trial/search',
             params={'s': query, 'match_mode': 0, 'type': 'product'},

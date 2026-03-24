@@ -358,15 +358,15 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
         if gtin_found:
             print(f"  [gtin] Encontrado en catálogo ML: {gtin_found}")
 
-        # Opción 2: buscar en UPC Item DB por marca+modelo
+        # Opción 2: buscar en UPC Item DB por título genérico (sin marca propia)
         if not gtin_found:
-            brand = prod['ml_attrs'].get('BRAND', '') or prod['meta'].get('marca', '')
             model = prod['ml_attrs'].get('MODEL', '') or prod['meta'].get('modelo', '')
-            if brand or model:
-                print(f"  [!] No encontrado en ML — buscando en UPC Item DB ({brand} {model})...")
-                gtin_found = ml_api.search_gtin_upc(brand, model)
-                if gtin_found:
-                    print(f"  [gtin] Encontrado en UPC Item DB: {gtin_found}")
+            # Usar modelo si existe, sino el título (más genérico que marca+modelo)
+            query = model if model else prod['title']
+            print(f"  [!] No encontrado en ML — buscando en UPC Item DB ({query[:60]})...")
+            gtin_found = ml_api.search_gtin_upc('', query)
+            if gtin_found:
+                print(f"  [gtin] Encontrado en UPC Item DB: {gtin_found}")
 
         # Opción 3: placeholder
         if not gtin_found:
