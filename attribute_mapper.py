@@ -856,7 +856,7 @@ def _format_number_unit(value: str, default_unit: str, allowed_units: list = Non
     - Si el valor NO es un número válido (texto libre) → retorna None (omitir)
     """
     import re
-    val = value.strip()
+    val = _resolve_fraction(value.strip())  # "3/8 pulgadas" → "0.375 pulgadas"
     m = re.match(r'^(\d+(?:[.,]\d+)?)\s*(.*)$', val)
     if m:
         num_part = m.group(1).replace(',', '.')
@@ -867,11 +867,11 @@ def _format_number_unit(value: str, default_unit: str, allowed_units: list = Non
                 valid_ids = {u.get('id', '').lower() for u in allowed_units}
                 if unit_part.lower() not in valid_ids:
                     unit_part = default_unit  # unidad inválida → usar default
-            return f"{num_part} {unit_part}" if unit_part else num_part
+            return f"{num_part} {unit_part}" if unit_part else None  # sin unidad válida → omitir
         elif default_unit:
             return f"{num_part} {default_unit}"
         else:
-            return num_part
+            return None  # número sin unidad y sin default_unit → omitir (ML rechaza número puro)
     return None  # valor no numérico → omitir
 
 
