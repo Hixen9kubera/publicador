@@ -202,6 +202,13 @@ def build_payload(prod: dict, token: str, dry_run: bool = False) -> dict | None:
     if 'PART_NUMBER' not in _attr_ids():
         attributes.append({'id': 'PART_NUMBER', 'value_name': prod['sku']})
 
+    # MANUFACTURER: requerido en algunas categorías — usar valor de BRAND como fallback
+    if 'MANUFACTURER' not in _attr_ids():
+        cat_has_manufacturer = any(a.get('id') == 'MANUFACTURER' for a in ml_category_attrs)
+        if cat_has_manufacturer:
+            brand_val = next((a['value_name'] for a in attributes if a.get('id') == 'BRAND'), DEFAULT_BRAND)
+            attributes.append({'id': 'MANUFACTURER', 'value_name': brand_val})
+
     # GTIN: incluir si el producto tiene uno en _barcode (campo manual WC), ml_attrs o _gtin.
     # Si la categoría requiere GTIN (missing_conditional_required), se reintenta
     # en publish_product con _barcode manual → catálogo ML → UPC Item DB → placeholder.
@@ -229,12 +236,18 @@ def build_payload(prod: dict, token: str, dry_run: bool = False) -> dict | None:
         _dims_ok = 0.001 <= _density <= 30
         if not _dims_ok:
             print(f"  [!] Dims paquete omitidas (densidad {_density:.2f} g/cm³ fuera de rango): {_l}x{_wi}x{_h} cm / {_w} kg")
-    if _w > 0:
+    # ML requiere las 4 dimensiones de paquete juntas o ninguna
+    if _dims_ok and _w > 0:
         attributes.append({'id': 'SELLER_PACKAGE_WEIGHT', 'value_name': f"{int(round(_w * 1000))} g"})
-    if _dims_ok:
         attributes.append({'id': 'SELLER_PACKAGE_LENGTH', 'value_name': f"{int(round(_l))} cm"})
         attributes.append({'id': 'SELLER_PACKAGE_WIDTH',  'value_name': f"{int(round(_wi))} cm"})
         attributes.append({'id': 'SELLER_PACKAGE_HEIGHT', 'value_name': f"{int(round(_h))} cm"})
+
+    # DEPTH: requerido en algunas categorías — usar prod['length'] como fallback si no se mapeó
+    if 'DEPTH' not in _attr_ids() and _l > 0:
+        cat_has_depth = any(a.get('id') == 'DEPTH' for a in ml_category_attrs)
+        if cat_has_depth:
+            attributes.append({'id': 'DEPTH', 'value_name': f"{_l} cm"})
 
     # Características secundarias — atributos opcionales de la categoría
     existing_ids = {a['id'] for a in attributes}
@@ -399,6 +412,16 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
         print(f"  [!] UNITS_PER_PACK requerido — reintentando con valor 1...")
         payload['attributes'] = [a for a in payload['attributes'] if a.get('id') != 'UNITS_PER_PACK']
         payload['attributes'].append({'id': 'UNITS_PER_PACK', 'value_name': '1'})
+        response, status_code = ml_api.create_item(payload, token)
+
+    # Retry: dimensiones de paquete inválidas → quitar todas y reintentar
+    if status_code == 400 and any(
+        'invalid.seller.package.dimensions' in c.get('code', '')
+        for c in response.get('cause', [])
+    ):
+        _pkg_ids = {'SELLER_PACKAGE_WEIGHT', 'SELLER_PACKAGE_LENGTH', 'SELLER_PACKAGE_WIDTH', 'SELLER_PACKAGE_HEIGHT'}
+        print(f"  [!] Dims paquete rechazadas por ML — reintentando sin dimensiones de paquete...")
+        payload['attributes'] = [a for a in payload['attributes'] if a.get('id') not in _pkg_ids]
         response, status_code = ml_api.create_item(payload, token)
 
     if status_code != 201:
