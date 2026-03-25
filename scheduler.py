@@ -125,6 +125,19 @@ def main():
         coalesce=True,
     )
 
+    # Prueba única a las 14:31 hora México (2026-03-25)
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _ZI
+    from apscheduler.triggers.date import DateTrigger as _DT
+    _prueba = _dt(2026, 3, 25, 14, 31, 0, tzinfo=_ZI(TIMEZONE))
+    scheduler.add_job(
+        run_publisher,
+        trigger=_DT(run_date=_prueba, timezone=TIMEZONE),
+        id='prueba_1431',
+        name='Prueba única 14:31',
+    )
+    log.info("  Prueba única programada: 2026-03-25 14:31 hora Mexico")
+
     if args.run_now:
         log.info("  --run-now: ejecutando inmediatamente...")
         run_publisher()
