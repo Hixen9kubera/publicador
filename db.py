@@ -64,7 +64,13 @@ def _get_conn():
     except ImportError:
         raise ImportError("Instala mysql-connector-python: pip install mysql-connector-python")
 
-    if _conn is None or not _conn.is_connected():
+    if _conn is not None:
+        try:
+            _conn.ping(reconnect=True, attempts=3, delay=2)
+        except Exception:
+            _conn = None
+
+    if _conn is None:
         _conn = mysql.connector.connect(
             host=_DB_HOST,
             port=_DB_PORT,
