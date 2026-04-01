@@ -206,7 +206,7 @@ def build_payload(prod: dict, token: str, dry_run: bool = False) -> dict | None:
     if 'MANUFACTURER' not in _attr_ids():
         cat_has_manufacturer = any(a.get('id') == 'MANUFACTURER' for a in ml_category_attrs)
         if cat_has_manufacturer:
-            brand_val = next((a['value_name'] for a in attributes if a.get('id') == 'BRAND'), DEFAULT_BRAND)
+            brand_val = next((a.get('value_name', '') for a in attributes if a.get('id') == 'BRAND'), DEFAULT_BRAND) or DEFAULT_BRAND
             attributes.append({'id': 'MANUFACTURER', 'value_name': brand_val})
 
     # GTIN: incluir si el producto tiene uno en _barcode (campo manual WC), ml_attrs o _gtin.
