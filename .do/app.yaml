@@ -3,9 +3,9 @@ region: nyc
 
 workers:
   - name: publisher-scheduler
-    source_dir: kubera_costos-main/publicaciones_ready
+    source_dir: /
     github:
-      repo: Hixen9kubera/Actualizaciones-Kubera
+      repo: joseKubera/publicaciones
       branch: main
       deploy_on_push: true
     run_command: python scheduler.py
