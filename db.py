@@ -83,6 +83,31 @@ def _get_conn():
     return _conn
 
 
+def ensure_connection(max_retries: int = 5, base_delay: int = 5) -> bool:
+    """
+    Intenta conectarse a la BD con reintentos y backoff exponencial.
+    Retorna True si logró conectar, False si agotó los reintentos.
+    """
+    import time
+    for attempt in range(1, max_retries + 1):
+        try:
+            conn = _get_conn()
+            conn.ping(reconnect=True)
+            print(f"  [db] Conexión a BD establecida (intento {attempt}/{max_retries})")
+            return True
+        except Exception as e:
+            global _conn
+            _conn = None
+            delay = base_delay * (2 ** (attempt - 1))  # 5, 10, 20, 40, 80s
+            if attempt < max_retries:
+                print(f"  [db] Intento {attempt}/{max_retries} fallido: {e}")
+                print(f"  [db] Reintentando en {delay}s...")
+                time.sleep(delay)
+            else:
+                print(f"  [db] No se pudo conectar tras {max_retries} intentos: {e}")
+    return False
+
+
 # ── DDL ───────────────────────────────────────────────────────────────────────
 
 CREATE_TOKENS_SQL = """

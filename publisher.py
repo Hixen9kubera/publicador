@@ -54,13 +54,13 @@ from config import (
     DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD,
 )
 
-# Inicializar BD si hay credenciales configuradas
+# Inicializar BD si hay credenciales configuradas (con reintentos)
 if DB_HOST and DB_NAME and DB_USER:
     db.set_credentials(DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD)
-    try:
-        db.create_tables()
-    except Exception as _e:
-        print(f"  [db] Advertencia — no se pudo conectar a la BD: {_e}")
+    if db.ensure_connection(max_retries=5, base_delay=5):
+        print(f"  [db] BD conectada exitosamente")
+    else:
+        print(f"  [db] Continuando sin BD — el progreso se guardará en archivos locales")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
