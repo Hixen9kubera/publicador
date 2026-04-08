@@ -57,3 +57,12 @@ Copia `.env.example` a `.env` y configura las variables de entorno necesarias (W
   - Cache de sale_terms por categoria (`get_sale_terms_cached()`) para evitar llamadas repetidas al API.
   - Nuevo bloque de retry: si ML devuelve error `sale_term.invalid_value_id` o `sale_term.value_id_required`, extrae el `value_id` correcto del mensaje de error y reintenta automaticamente.
   - Fallback hardcodeado a `6150835` (Garantia del vendedor) si el API no responde.
+
+### 2026-04-08 - Retry conexion BD con backoff exponencial
+
+**Problema:** La conexion a MySQL se intentaba una sola vez al iniciar el publisher. Si fallaba (timeout, red), toda la corrida continuaba sin BD.
+
+**Cambios realizados:**
+
+- **db.py**: Nueva funcion `ensure_connection(max_retries=5, base_delay=5)` que reintenta la conexion con backoff exponencial (5s, 10s, 20s, 40s, 80s).
+- **publisher.py**: Usa `ensure_connection()` al iniciar en lugar del intento unico anterior.
