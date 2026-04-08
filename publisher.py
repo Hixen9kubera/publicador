@@ -126,12 +126,69 @@ def save_backlog(sku: str, entry: dict) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 _attr_cache: dict[str, list] = {}
+_sale_terms_cache: dict[str, list] = {}
 
 def get_category_attrs_cached(category_id: str, token: str) -> list:
     if category_id not in _attr_cache:
         attrs = ml_api.get_category_attributes(category_id, token)
         _attr_cache[category_id] = attrs
     return _attr_cache[category_id]
+
+
+def get_sale_terms_cached(category_id: str, token: str) -> list:
+    if category_id not in _sale_terms_cache:
+        terms = ml_api.get_category_sale_terms(category_id, token)
+        _sale_terms_cache[category_id] = terms
+    return _sale_terms_cache[category_id]
+
+
+def build_sale_terms(category_id: str, token: str) -> list:
+    """
+    Construye la lista de sale_terms usando value_id del API de ML.
+    Fallback a IDs conocidos si el API no responde.
+    """
+    # Fallbacks conocidos para MLM (México)
+    WARRANTY_TYPE_SELLER = '6150835'   # "Garantía del vendedor"
+    WARRANTY_TIME_30D    = '180 días'  # value_name para WARRANTY_TIME (acepta texto libre)
+
+    terms = get_sale_terms_cached(category_id, token)
+    sale_terms = []
+
+    # WARRANTY_TYPE — requiere value_id obligatorio
+    wt = next((t for t in terms if t.get('id') == 'WARRANTY_TYPE'), None)
+    if wt:
+        # Buscar el value_id de "Garantía del vendedor"
+        seller_val = None
+        for v in wt.get('values', []):
+            vname = (v.get('name') or '').lower()
+            if 'vendedor' in vname or 'seller' in vname:
+                seller_val = v.get('id')
+                break
+        # Si no encontramos "vendedor", usar el primer valor disponible
+        if not seller_val and wt.get('values'):
+            seller_val = wt['values'][0].get('id')
+        sale_terms.append({'id': 'WARRANTY_TYPE', 'value_id': seller_val or WARRANTY_TYPE_SELLER})
+    else:
+        sale_terms.append({'id': 'WARRANTY_TYPE', 'value_id': WARRANTY_TYPE_SELLER})
+
+    # WARRANTY_TIME — puede ser value_name (texto libre) o value_id según la categoría
+    wtime = next((t for t in terms if t.get('id') == 'WARRANTY_TIME'), None)
+    if wtime and wtime.get('values'):
+        # Buscar "30 días" o similar en los valores permitidos
+        time_val = None
+        for v in wtime.get('values', []):
+            vname = (v.get('name') or '').lower()
+            if '30' in vname or '180' in vname:
+                time_val = v.get('id')
+                break
+        if time_val:
+            sale_terms.append({'id': 'WARRANTY_TIME', 'value_id': time_val})
+        else:
+            sale_terms.append({'id': 'WARRANTY_TIME', 'value_name': WARRANTY_TIME_30D})
+    else:
+        sale_terms.append({'id': 'WARRANTY_TIME', 'value_name': WARRANTY_TIME_30D})
+
+    return sale_terms
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -286,10 +343,7 @@ def build_payload(prod: dict, token: str, dry_run: bool = False) -> dict | None:
         'status':             'paused',
         'pictures':           picture_ids,
         'attributes':         attributes,
-        'sale_terms': [
-            {'id': 'WARRANTY_TYPE', 'value_name': 'Garantía del vendedor'},
-            {'id': 'WARRANTY_TIME', 'value_name': '30 días'},
-        ],
+        'sale_terms': build_sale_terms(category_id, token),
         'shipping': {
             'mode':           'me2',
             'local_pick_up':  False,
@@ -422,6 +476,33 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
         _pkg_ids = {'SELLER_PACKAGE_WEIGHT', 'SELLER_PACKAGE_LENGTH', 'SELLER_PACKAGE_WIDTH', 'SELLER_PACKAGE_HEIGHT'}
         print(f"  [!] Dims paquete rechazadas por ML — reintentando sin dimensiones de paquete...")
         payload['attributes'] = [a for a in payload['attributes'] if a.get('id') not in _pkg_ids]
+        response, status_code = ml_api.create_item(payload, token)
+
+    # Retry: sale_term WARRANTY_TYPE inválido → obtener value_id correcto del error y reintentar
+    if status_code == 400 and any(
+        c.get('code') in ('sale_term.invalid_value_id', 'sale_term.value_id_required')
+        for c in response.get('cause', [])
+    ):
+        print(f"  [!] sale_terms inválidos — corrigiendo value_id y reintentando...")
+        # Extraer value_id permitido del mensaje de error si está disponible
+        for cause in response.get('cause', []):
+            msg = cause.get('message', '')
+            if 'WARRANTY_TYPE' in msg and 'Allowed values are' in msg:
+                import re
+                match = re.search(r'\[(\d+)\]', msg)
+                if match:
+                    correct_id = match.group(1)
+                    print(f"  [!] Usando WARRANTY_TYPE value_id={correct_id} del error de ML")
+                    for st in payload['sale_terms']:
+                        if st['id'] == 'WARRANTY_TYPE':
+                            st.pop('value_name', None)
+                            st['value_id'] = correct_id
+                            break
+        # Asegurar que todos los sale_terms tengan value_id en lugar de value_name para WARRANTY_TYPE
+        for st in payload['sale_terms']:
+            if st['id'] == 'WARRANTY_TYPE' and 'value_id' not in st:
+                st.pop('value_name', None)
+                st['value_id'] = '6150835'
         response, status_code = ml_api.create_item(payload, token)
 
     if status_code != 201:

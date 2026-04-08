@@ -126,6 +126,23 @@ def get_category_attributes(category_id: str, token: str) -> list:
     return []
 
 
+def get_category_sale_terms(category_id: str, token: str) -> list:
+    """
+    Retorna la lista de sale_terms válidos para una categoría ML.
+    Cada sale_term incluye id, name, value_type y values (con value_id).
+    """
+    resp = requests.get(
+        f"{ML_API_BASE}/categories/{category_id}/sale_terms",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=15
+    )
+    if resp.status_code == 200:
+        return resp.json()
+    print(f"  [ml_api] Error obteniendo sale_terms de {category_id}: {resp.status_code}")
+    return []
+
+
+
 def search_gtin_in_catalog(category_id: str, title: str, token: str) -> str | None:
     """
     Busca un producto similar en el catálogo ML por título+categoría.
