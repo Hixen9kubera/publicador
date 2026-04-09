@@ -523,22 +523,39 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
         response, status_code = ml_api.create_item(payload, token)
 
     # Retry: GTIN con formato inválido (placeholder rechazado) → quitar GTIN, dejar solo EMPTY_GTIN_REASON
+    # Si la categoría requiere GTIN obligatorio, el retry sin GTIN también fallará —
+    # en ese caso restauramos y dejamos que se marque como gtin_error.
+    _gtin_placeholder_rejected = False
     if status_code == 400 and any(
         'product_identifier.invalid_format' in c.get('code', '')
         for c in response.get('cause', [])
     ):
+        _gtin_placeholder_rejected = True
+        # Guardar GTIN actual por si hay que restaurarlo
+        _saved_gtin = next((a for a in payload['attributes'] if a.get('id') == 'GTIN'), None)
         print(f"  [!] GTIN rechazado por formato inválido — reintentando sin GTIN (solo EMPTY_GTIN_REASON)...")
         payload['attributes'] = [a for a in payload['attributes'] if a.get('id') != 'GTIN']
         # Asegurar que EMPTY_GTIN_REASON esté presente
         if not any(a.get('id') == 'EMPTY_GTIN_REASON' for a in payload['attributes']):
             payload['attributes'].append({'id': 'EMPTY_GTIN_REASON', 'value_id': '17055161', 'value_name': 'Otra razón'})
         response, status_code = ml_api.create_item(payload, token)
+        # Si la categoría requiere GTIN obligatorio, restaurar el GTIN para el backlog
+        if status_code == 400 and any(
+            c.get('code') == 'item.attribute.missing_conditional_required'
+            and 'GTIN' in c.get('message', '')
+            for c in response.get('cause', [])
+        ):
+            print(f"  [!] Categoría requiere GTIN obligatorio — se necesita código de barras real")
+            if _saved_gtin:
+                payload['attributes'].append(_saved_gtin)
 
     if status_code != 201:
         error_msg = response.get('message', str(response))[:200]
-        # Detectar si el error es específicamente por GTIN inválido
-        is_gtin_error = any(
+        # Detectar si el error es específicamente por GTIN inválido/requerido
+        is_gtin_error = _gtin_placeholder_rejected or any(
             'product_identifier.invalid_format' in c.get('code', '') or
+            (c.get('code') == 'item.attribute.missing_conditional_required'
+             and 'GTIN' in c.get('message', '')) or
             ('GTIN' in c.get('message', '') and 'invalid' in c.get('message', '').lower())
             for c in response.get('cause', [])
         )

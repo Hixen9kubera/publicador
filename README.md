@@ -51,8 +51,9 @@ Copia `.env.example` a `.env` y configura las variables de entorno necesarias (W
 
 **Cambios realizados en publisher.py:**
 
-- Nuevo retry para `missing.seller.package.dimensions`: cuando ML exige dimensiones y el producto no las tiene, agrega valores por defecto conservadores (1 kg, 30x20x15 cm) y reintenta.
-- Nuevo retry para `product_identifier.invalid_format`: quita el atributo GTIN del payload y deja solo `EMPTY_GTIN_REASON` ("Otra razon"), luego reintenta.
+- Nuevo retry para `missing.seller.package.dimensions`: cuando ML exige dimensiones y el producto no las tiene, agrega valores por defecto conservadores (1 kg, 30x20x15 cm) y reintenta. Resolvio TEC-1352-NEG, TEC-0472-HBM, TEC-1353-MET.
+- Nuevo retry para `product_identifier.invalid_format`: quita el atributo GTIN del payload y deja solo `EMPTY_GTIN_REASON` ("Otra razon"), luego reintenta. Si la categoria requiere GTIN obligatorio (ej: MLM190081), restaura el GTIN y marca como `gtin_error` para revision manual.
+- Mejorada la deteccion de `gtin_error`: ahora tambien detecta `missing_conditional_required` para GTIN (antes solo detectaba `invalid_format`).
 
 ### 2026-04-08 - Fix WARRANTY_TYPE sale_terms (value_id)
 
