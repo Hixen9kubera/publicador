@@ -406,6 +406,16 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
     print(f"  Creando item en ML...")
     response, status_code = ml_api.create_item(payload, token)
 
+    # Retry si token expiró durante la ejecución (401) → refrescar y reintentar
+    if status_code == 401:
+        print(f"  [!] Token expirado (401) — refrescando token de {cuenta}...")
+        try:
+            token = ml_api.refresh_token(cuenta)
+            print(f"  [✓] Token refrescado — reintentando create_item...")
+            response, status_code = ml_api.create_item(payload, token)
+        except Exception as e:
+            print(f"  [✗] No se pudo refrescar token: {e}")
+
     # Retry si ML devuelve error 5xx (timeout interno, sobrecarga, etc.)
     if status_code >= 500:
         print(f"  [!] Error {status_code} de ML — reintentando en 15s...")
