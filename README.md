@@ -43,6 +43,17 @@ Copia `.env.example` a `.env` y configura las variables de entorno necesarias (W
 
 ## Changelog
 
+### 2026-04-09 - Retry dims faltantes y GTIN placeholder rechazado
+
+**Problema 1:** Error 400 `item.attribute.missing.seller.package.dimensions` — productos sin peso/dimensiones en WooCommerce (ej: TEC-0472-HBM, TEC-1353-MET). ML las exige pero el publisher no las enviaba. El retry existente solo manejaba dims *invalidas*, no *faltantes*.
+
+**Problema 2:** Error 400 `product_identifier.invalid_format` — el placeholder GTIN `0000000000000` es rechazado por algunas cuentas (ej: BEKURA/TEC-1254). El error se registraba pero no se reintentaba.
+
+**Cambios realizados en publisher.py:**
+
+- Nuevo retry para `missing.seller.package.dimensions`: cuando ML exige dimensiones y el producto no las tiene, agrega valores por defecto conservadores (1 kg, 30x20x15 cm) y reintenta.
+- Nuevo retry para `product_identifier.invalid_format`: quita el atributo GTIN del payload y deja solo `EMPTY_GTIN_REASON` ("Otra razon"), luego reintenta.
+
 ### 2026-04-08 - Fix WARRANTY_TYPE sale_terms (value_id)
 
 **Problema:** Error 400 al crear items en ML:
