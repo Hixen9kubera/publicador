@@ -478,6 +478,23 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
         payload['attributes'] = [a for a in payload['attributes'] if a.get('id') not in _pkg_ids]
         response, status_code = ml_api.create_item(payload, token)
 
+    # Retry: dimensiones de paquete FALTANTES (requeridas por la categoría pero no enviadas)
+    # → agregar valores por defecto razonables y reintentar
+    if status_code == 400 and any(
+        'missing.seller.package.dimensions' in c.get('code', '')
+        for c in response.get('cause', [])
+    ):
+        _pkg_ids = {'SELLER_PACKAGE_WEIGHT', 'SELLER_PACKAGE_LENGTH', 'SELLER_PACKAGE_WIDTH', 'SELLER_PACKAGE_HEIGHT'}
+        # Quitar dims parciales si hubiera alguna
+        payload['attributes'] = [a for a in payload['attributes'] if a.get('id') not in _pkg_ids]
+        # Valores por defecto conservadores: 1 kg, 30x20x15 cm (caja mediana)
+        payload['attributes'].append({'id': 'SELLER_PACKAGE_WEIGHT', 'value_name': '1000 g'})
+        payload['attributes'].append({'id': 'SELLER_PACKAGE_LENGTH', 'value_name': '30 cm'})
+        payload['attributes'].append({'id': 'SELLER_PACKAGE_WIDTH',  'value_name': '20 cm'})
+        payload['attributes'].append({'id': 'SELLER_PACKAGE_HEIGHT', 'value_name': '15 cm'})
+        print(f"  [!] Dims paquete requeridas pero no disponibles — reintentando con defaults (1kg, 30x20x15cm)...")
+        response, status_code = ml_api.create_item(payload, token)
+
     # Retry: sale_term WARRANTY_TYPE inválido → obtener value_id correcto del error y reintentar
     if status_code == 400 and any(
         c.get('code') in ('sale_term.invalid_value_id', 'sale_term.value_id_required')
@@ -503,6 +520,18 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
             if st['id'] == 'WARRANTY_TYPE' and 'value_id' not in st:
                 st.pop('value_name', None)
                 st['value_id'] = '6150835'
+        response, status_code = ml_api.create_item(payload, token)
+
+    # Retry: GTIN con formato inválido (placeholder rechazado) → quitar GTIN, dejar solo EMPTY_GTIN_REASON
+    if status_code == 400 and any(
+        'product_identifier.invalid_format' in c.get('code', '')
+        for c in response.get('cause', [])
+    ):
+        print(f"  [!] GTIN rechazado por formato inválido — reintentando sin GTIN (solo EMPTY_GTIN_REASON)...")
+        payload['attributes'] = [a for a in payload['attributes'] if a.get('id') != 'GTIN']
+        # Asegurar que EMPTY_GTIN_REASON esté presente
+        if not any(a.get('id') == 'EMPTY_GTIN_REASON' for a in payload['attributes']):
+            payload['attributes'].append({'id': 'EMPTY_GTIN_REASON', 'value_id': '17055161', 'value_name': 'Otra razón'})
         response, status_code = ml_api.create_item(payload, token)
 
     if status_code != 201:
