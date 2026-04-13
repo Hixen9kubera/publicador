@@ -478,6 +478,28 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
         payload['attributes'].append({'id': 'UNITS_PER_PACK', 'value_name': '1'})
         response, status_code = ml_api.create_item(payload, token)
 
+    # Retry: imágenes demasiado pequeñas (<500px) → re-preupload con escalado
+    # ml_api.preupload_picture ya escala imágenes pequeñas con Pillow. Forzar
+    # pre-upload de las que quedaron como {'source': url}.
+    if status_code == 400 and any(
+        'item.pictures.invalid_size' in c.get('code', '')
+        for c in response.get('cause', [])
+    ):
+        print(f"  [!] Imágenes rechazadas por tamaño — re-subiendo con escalado automático...")
+        new_pictures = []
+        for pic in payload.get('pictures', []):
+            if 'id' in pic:
+                new_pictures.append(pic)  # ya pre-subida, conservar
+            elif 'source' in pic:
+                pid = ml_api.preupload_picture(pic['source'], token)
+                if pid:
+                    new_pictures.append({'id': pid})
+                    print(f"    [✓] Re-subida con escalado → {pid}")
+                # Si falla, omitir esta imagen
+        if new_pictures:
+            payload['pictures'] = new_pictures
+            response, status_code = ml_api.create_item(payload, token)
+
     # Retry: dimensiones de paquete inválidas → quitar todas y reintentar
     if status_code == 400 and any(
         'invalid.seller.package.dimensions' in c.get('code', '')

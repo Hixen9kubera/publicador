@@ -56,6 +56,15 @@ Copia `.env.example` a `.env` y configura las variables de entorno necesarias (W
 - Mejorada la deteccion de `gtin_error`: ahora tambien detecta `missing_conditional_required` para GTIN (antes solo detectaba `invalid_format`).
 - Nuevo retry para HTTP 401 (token expirado) en `create_item`: si el token expira durante la ejecucion (ej: entre pre-upload de imagenes y creacion del item), refresca automaticamente y reintenta.
 
+### 2026-04-13 - Fix imagenes pequenas rechazadas por ML (item.pictures.invalid_size)
+
+**Problema:** Error 400 `item.pictures.invalid_size` — ML rechaza imagenes con menos de 500px en el lado largo o 250px en el lado corto. Afectaba multiples SKUs (TEC-1409-MET-AVEO-1.5L, OFI-0107-NEG, TEC-1258-2M-NEG, TEC-0834-NEG, VEH-0027, MASC-0051-NEG-VER).
+
+**Cambios realizados:**
+
+- **ml_api.py**: Nueva funcion `_ensure_min_size()` que usa Pillow para escalar imagenes pequenas a minimo 500x250 px antes de pre-subirlas a ML. Se aplica automaticamente en `preupload_picture()`.
+- **publisher.py**: Nuevo retry cuando ML devuelve `item.pictures.invalid_size` — fuerza el re-preupload de las imagenes que quedaron como fallback URL (`{'source': url}`), aplicando el escalado y reintentando `create_item`.
+
 ### 2026-04-08 - Fix WARRANTY_TYPE sale_terms (value_id)
 
 **Problema:** Error 400 al crear items en ML:

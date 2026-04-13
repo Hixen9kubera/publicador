@@ -195,20 +195,59 @@ def search_gtin_upc(brand: str, query: str) -> str | None:
 
 
 
+def _ensure_min_size(image_bytes: bytes, min_long: int = 500, min_short: int = 250) -> bytes:
+    """
+    Si la imagen es menor que min_long×min_short, la escala proporcionalmente
+    para que cumpla el mínimo de ML. Retorna bytes JPEG.
+    """
+    from PIL import Image
+    import io
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        w, h = img.size
+        long_side = max(w, h)
+        short_side = min(w, h)
+        if long_side >= min_long and short_side >= min_short:
+            return image_bytes  # ya cumple
+
+        # Calcular factor de escala necesario
+        scale = max(min_long / long_side, min_short / short_side)
+        new_w = int(w * scale) + 1
+        new_h = int(h * scale) + 1
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+
+        # Convertir a RGB si es RGBA/P (JPEG no soporta alfa)
+        if img.mode in ('RGBA', 'P', 'LA'):
+            bg = Image.new('RGB', img.size, (255, 255, 255))
+            bg.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
+            img = bg
+        elif img.mode != 'RGB':
+            img = img.convert('RGB')
+
+        buf = io.BytesIO()
+        img.save(buf, format='JPEG', quality=90)
+        print(f"    [img] Escalada de {w}x{h} → {new_w}x{new_h}")
+        return buf.getvalue()
+    except Exception as e:
+        print(f"    [img] No se pudo escalar: {e}")
+        return image_bytes
+
+
 def preupload_picture(image_url: str, token: str) -> str | None:
     """
     Pre-sube una imagen a ML descargandola de la URL y subiendola directamente.
+    Si la imagen es menor a 500px, la escala antes de subir.
     Retorna el picture_id de ML, o None si falla.
     """
     try:
         img_resp = requests.get(image_url, timeout=30)
         if img_resp.status_code != 200:
             return None
-        content_type = img_resp.headers.get('Content-Type', 'image/jpeg')
+        image_data = _ensure_min_size(img_resp.content)
         resp = requests.post(
             f"{ML_API_BASE}/pictures",
             headers={"Authorization": f"Bearer {token}"},
-            files={"file": ("image.jpg", img_resp.content, content_type)},
+            files={"file": ("image.jpg", image_data, "image/jpeg")},
             timeout=60
         )
         if resp.status_code == 201:
