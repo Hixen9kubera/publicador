@@ -43,6 +43,16 @@ Copia `.env.example` a `.env` y configura las variables de entorno necesarias (W
 
 ## Changelog
 
+### 2026-04-21 - Saltar SKUs con errores no-recuperables (NEEDS_MANUAL_CONFIG)
+
+**Problema:** Después del deploy que skipea `SIZE_GRID_ID` con valor placeholder, 4 SKUs de ropa/calzado (ROP-0456, ROP-0240, ROP-0465, CALZ-0200-TRANS-43) seguían fallando con `missing.fashion_grid.grid_id.values` porque la categoría de ML **exige** una guía de tallas. Estos errores NO son bugs del publisher — requieren que el seller configure una guía de tallas en su cuenta ML. Sin embargo, el cron los reintentaba cada hora contaminando el backlog con errores repetitivos (6 errores × hora × 2 cuentas).
+
+**Cambios en publisher.py:**
+
+- Detectar errores no-recuperables (`missing.fashion_grid.grid_id.values`, `invalid.fashion_grid.grid_id.values`, `shipping.lost_me1_by_user`) y marcar el `error_label` en `ml_progress` con prefijo `NEEDS_MANUAL_CONFIG:` incluyendo la acción que el seller debe tomar.
+- En el main loop: cargar en un set aparte los SKUs con `error` que empiece por `NEEDS_MANUAL_CONFIG` y saltarlos antes de reintentar. Se muestra un contador al inicio de cada cuenta para que el usuario sepa cuántos SKUs están pendientes de config manual.
+- Los 4 SKUs de grid existentes fueron marcados retroactivamente en la BD para que tomen efecto desde la próxima corrida.
+
 ### 2026-04-21 - Abort-on-DB-failure (fail-hard si no hay conexión a BD)
 
 **Problema:** Cuando la conexión a MySQL fallaba al iniciar (timeout, red caída, credenciales), el publisher continuaba procesando productos sin registrar nada en BD. El progreso se perdía silenciosamente — solo aparecía una advertencia `[db] Advertencia — no se pudo guardar progress en BD` entre productos, pero la corrida seguía adelante.

@@ -628,13 +628,36 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
             ('GTIN' in c.get('message', '') and 'invalid' in c.get('message', '').lower())
             for c in response.get('cause', [])
         )
+        # Detectar errores que requieren configuración manual en la cuenta ML del seller
+        # (no-recuperables desde el código — marcar para no reintentar en corridas futuras)
+        needs_manual = any(
+            c.get('code') in ('missing.fashion_grid.grid_id.values',
+                              'invalid.fashion_grid.grid_id.values',
+                              'shipping.lost_me1_by_user')
+            for c in response.get('cause', [])
+        )
+        manual_reasons = []
+        for c in response.get('cause', []):
+            code = c.get('code', '')
+            if code in ('missing.fashion_grid.grid_id.values', 'invalid.fashion_grid.grid_id.values'):
+                manual_reasons.append('GRID_REQUERIDO (configurar guía de tallas en ML)')
+            elif code == 'shipping.lost_me1_by_user':
+                manual_reasons.append('ME1_INACTIVO (activar Mercado Envíos 1 en dashboard ML)')
         if is_gtin_error:
             print(f"  [✗] Error GTIN — la cuenta {cuenta} requiere código de barras real para {sku}")
+        elif needs_manual:
+            print(f"  [✗] Requiere configuración manual en cuenta {cuenta}: {', '.join(manual_reasons)}")
         else:
             print(f"  [✗] Error {status_code}: {error_msg}")
         print(f"  Detalle: {response.get('error', '')} | Causes: {response.get('cause', [])}")
-        error_label = f"GTIN_INVALIDO: cuenta {cuenta} requiere código de barras real" if is_gtin_error else f"HTTP {status_code}: {error_msg}"
-        result = {'success': False, 'sku': sku, 'error': error_label, 'gtin_error': is_gtin_error}
+        if is_gtin_error:
+            error_label = f"GTIN_INVALIDO: cuenta {cuenta} requiere código de barras real"
+        elif needs_manual:
+            error_label = f"NEEDS_MANUAL_CONFIG: {' | '.join(manual_reasons)}"
+        else:
+            error_label = f"HTTP {status_code}: {error_msg}"
+        result = {'success': False, 'sku': sku, 'error': error_label,
+                  'gtin_error': is_gtin_error, 'needs_manual_config': needs_manual}
         save_backlog(backlog_key, {
             'timestamp':    timestamp,
             'cuenta':       cuenta,
@@ -870,7 +893,15 @@ def main():
         ya_publicados = {k for k, v in progress.items()
                          if v.get('success') and v.get('cuenta') == cuenta
                          and not v.get('dry_run')}
+        # SKUs con error no-recuperable (requieren config manual en ML): saltarlos
+        # para no seguir contaminando el backlog con reintentos que siempre fallan.
+        needs_manual = {k for k, v in progress.items()
+                        if v.get('cuenta') == cuenta
+                        and not v.get('success')
+                        and (v.get('error') or '').startswith('NEEDS_MANUAL_CONFIG')}
         print(f"  Progreso previo: {len(ya_publicados)} ya publicados en {cuenta}")
+        if needs_manual:
+            print(f"  Saltando {len(needs_manual)} SKU(s) con error no-recuperable (requieren config manual en ML)")
 
         for idx, prod in enumerate(products, 1):
             sku = prod['sku']
@@ -881,6 +912,12 @@ def main():
                 print(f"\n  [db] ERROR — Se perdió la conexión a la BD a mitad del proceso.")
                 print(f"  [db] Abortando para no continuar sin registrar progreso. Restaura la BD y vuelve a ejecutar.")
                 sys.exit(1)
+
+            if prog_key in needs_manual:
+                print(f"\n  [{idx}/{len(products)}] {sku} — requiere config manual en ML, saltando")
+                stats['saltados'] += 1
+                wc_id_por_sku[sku] = prod['wc_id']
+                continue
 
             if prog_key in ya_publicados or sku in ya_publicados:
                 print(f"\n  [{idx}/{len(products)}] {sku} — ya publicado en {cuenta}, saltando")
