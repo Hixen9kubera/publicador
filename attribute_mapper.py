@@ -620,6 +620,46 @@ WC_TO_ML_ID: dict[str, str] = {
 }
 
 
+_SKIP_VALUE_TYPES = {'grid_id', 'grid_row_id', 'picture'}
+
+
+def _is_numeric(val: str) -> bool:
+    """True si val parece un número (entero, decimal o con fracción)."""
+    import re
+    if not val:
+        return False
+    v = val.strip().replace(',', '.')
+    return bool(re.match(r'^-?\d+(\.\d+)?$', v) or re.match(r'^\d+\s*/\s*\d+$', v))
+
+
+def _validate_value(attr: dict, val_str: str) -> str | None:
+    """
+    Valida/normaliza el value_name según el value_type del atributo.
+    - number_unit → llama _format_number_unit
+    - number      → solo dígitos; si no, devuelve None (omitir)
+    - Edad        → agrega 'años' si es numérico
+    Retorna el valor final o None si el atributo debe omitirse.
+    """
+    vt = attr.get('value_type')
+    attr_id = attr.get('id', '')
+
+    if vt == 'number_unit':
+        return _format_number_unit(val_str, attr.get('default_unit', ''), attr.get('allowed_units'))
+
+    if vt == 'number':
+        # ML rechaza strings tipo "N/A" para atributos numéricos
+        if not _is_numeric(val_str):
+            return None
+        return _resolve_fraction(val_str).replace(',', '.')
+
+    if attr_id in ('MIN_RECOMMENDED_AGE', 'MAX_RECOMMENDED_AGE'):
+        import re as _re
+        if _re.match(r'^\d+(\.\d+)?$', val_str):
+            return f"{val_str} años"
+
+    return val_str
+
+
 def build_attributes(ml_attrs: dict, ml_required: list, wc_attrs: dict = None) -> list:
     """
     Construye la lista de atributos para el payload de ML.
@@ -644,6 +684,12 @@ def build_attributes(ml_attrs: dict, ml_required: list, wc_attrs: dict = None) -
         tags      = attr.get('tags', {})
         is_required = tags.get('required', False)
         allowed_vals = attr.get('values', [])
+
+        # Omitir tipos especiales que ML gestiona internamente o que requieren IDs específicos:
+        # grid_id/grid_row_id → requieren una guía de tallas real (no se puede inferir)
+        # picture             → requiere un picture_id, no texto
+        if attr.get('value_type') in _SKIP_VALUE_TYPES:
+            continue
 
         # Buscar valor en ml_attrs por id del atributo o por nombre.
         # Incluye lookup directo por ML ID (ej: ml_attrs tiene 'COLOR': 'Negro'
@@ -679,18 +725,12 @@ def build_attributes(ml_attrs: dict, ml_required: list, wc_attrs: dict = None) -
                     result.append({'id': attr_id, 'value_id': allowed_vals[0]['id']})
                 # else: no requerido y sin match → omitir
             else:
-                # Acepta texto libre
+                # Acepta texto libre — validar según value_type
                 val_str = str(value).strip()
-                if attr.get('value_type') == 'number_unit':
-                    formatted = _format_number_unit(val_str, attr.get('default_unit', ''), attr.get('allowed_units'))
-                    if formatted is None:
-                        continue  # texto no numérico para atributo numérico → omitir
-                    val_str = formatted
-                elif attr_id in ('MIN_RECOMMENDED_AGE', 'MAX_RECOMMENDED_AGE'):
-                    import re as _re
-                    if _re.match(r'^\d+(\.\d+)?$', val_str):
-                        val_str = f"{val_str} años"
-                result.append({'id': attr_id, 'value_name': val_str})
+                validated = _validate_value(attr, val_str)
+                if validated is None:
+                    continue  # tipo incompatible (ej: "N/A" para number) → omitir
+                result.append({'id': attr_id, 'value_name': validated})
 
         elif is_required and allowed_vals:
             # Required, sin valor disponible → primer valor por defecto
@@ -775,6 +815,11 @@ def build_secondary_attributes(prod: dict, category_attrs: list, existing_ids: s
         if attr_id in ('BRAND', 'MODEL'):
             continue
 
+        # Omitir tipos especiales que ML gestiona internamente o requieren IDs:
+        # grid_id/grid_row_id → tabla de talles real; picture → picture_id real
+        if attr.get('value_type') in _SKIP_VALUE_TYPES:
+            continue
+
         allowed_vals = attr.get('values', [])
 
         # Para atributos de dimensión, usar _get_dimension_value (unidades correctas)
@@ -831,18 +876,13 @@ def build_secondary_attributes(prod: dict, category_attrs: list, existing_ids: s
                 pass
         else:
             val_str = str(value).strip()
-            if attr.get('value_type') == 'number_unit':
-                formatted = _format_number_unit(val_str, attr.get('default_unit', ''), attr.get('allowed_units'))
-                if formatted is None:
-                    continue  # texto no numérico para atributo numérico → omitir
-                result.append({'id': attr_id, 'value_name': formatted})
-            elif attr_id in ('MIN_RECOMMENDED_AGE', 'MAX_RECOMMENDED_AGE'):
-                import re as _re
-                if _re.match(r'^\d+(\.\d+)?$', val_str):
-                    val_str = f"{val_str} años"
-                result.append({'id': attr_id, 'value_name': val_str})
-            else:
-                result.append({'id': attr_id, 'value_name': _resolve_fraction(val_str)})
+            validated = _validate_value(attr, val_str)
+            if validated is None:
+                continue  # tipo incompatible (ej: "N/A" para number) → omitir
+            # Para atributos de texto libre sin value_type especial, normalizar fracciones
+            if attr.get('value_type') not in ('number', 'number_unit') and attr_id not in ('MIN_RECOMMENDED_AGE', 'MAX_RECOMMENDED_AGE'):
+                validated = _resolve_fraction(validated)
+            result.append({'id': attr_id, 'value_name': validated})
 
     return result
 

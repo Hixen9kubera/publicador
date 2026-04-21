@@ -43,6 +43,23 @@ Copia `.env.example` a `.env` y configura las variables de entorno necesarias (W
 
 ## Changelog
 
+### 2026-04-21 - Fix SIZE_GRID_ID, ENERGY_EFFICIENCY_LABEL y SHEETS_NUMBER
+
+**Problema 1:** Error 400 `invalid.fashion_grid.grid_id.values` / `missing.fashion_grid.grid_id.values` — categorias de ropa/calzado (MLM112156 Vestidos, MLM112197 Ropa, MLM192717 Calzado) rechazaban el item porque el atributo `SIZE_GRID_ID` se estaba enviando con el valor literal placeholder `"grid_id"` heredado de los atributos WC. Afecto a ROP-0456, ROP-0240, CALZ-0200-TRANS-43, ROP-0465.
+
+**Problema 2:** Error 400 `item.attribute.value_name.invalid` — el atributo `ENERGY_EFFICIENCY_LABEL` (value_type=picture) en MLM1584 se enviaba con `value_name='A'` en lugar de un picture_id valido. Afecto a ACC-0091-AST-PLA.
+
+**Problema 3:** Error 400 `item.attribute.invalid` — `SHEETS_NUMBER` (value_type=number) se enviaba con `value_name='N/A'` en ORG-0773-MUL, pero ML requiere un numero.
+
+**Cambios realizados:**
+
+- **attribute_mapper.py**: Nuevo set `_SKIP_VALUE_TYPES = {grid_id, grid_row_id, picture}` que omite estos atributos en `build_attributes()` y `build_secondary_attributes()`. Los tipos `grid_id`/`grid_row_id` requieren una guia de tallas real (no se pueden inferir); `picture` requiere un picture_id, no texto.
+- **attribute_mapper.py**: Nueva funcion `_validate_value()` que valida el value_name segun `value_type` antes de agregarlo. Para `value_type=number`, rechaza strings no-numericos como "N/A" y omite el atributo.
+- **publisher.py**: Nuevo retry para `invalid.fashion_grid.grid_id.values` y `missing.fashion_grid.grid_id.values` — quita `SIZE_GRID_ID` del payload y reintenta. Si la categoria realmente exige el grid, el error queda en backlog (requiere que el seller configure una guia de tallas en su cuenta ML).
+- **publisher.py**: Nuevo retry para atributos de tipo `picture` con valor invalido (`item.attribute.value_name.invalid` con mensaje "type picture") — detecta el atributo ofensor del mensaje de error y lo quita del payload.
+
+**Nota:** Errores `shipping.lost_me1_by_user` observados en el backlog **no son bugs del publisher** — requieren que el usuario active el modo "Mercado Envios 1" en el dashboard de la cuenta ML (BEKURA y SANCORFASHION).
+
 ### 2026-04-09 - Retry dims faltantes y GTIN placeholder rechazado
 
 **Problema 1:** Error 400 `item.attribute.missing.seller.package.dimensions` — productos sin peso/dimensiones en WooCommerce (ej: TEC-0472-HBM, TEC-1353-MET). ML las exige pero el publisher no las enviaba. El retry existente solo manejaba dims *invalidas*, no *faltantes*.

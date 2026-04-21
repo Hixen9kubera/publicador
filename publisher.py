@@ -500,6 +500,37 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
             payload['pictures'] = new_pictures
             response, status_code = ml_api.create_item(payload, token)
 
+    # Retry: SIZE_GRID_ID inválido o faltante (categorías de ropa / calzado con fashion_grid).
+    # Sin acceso a una tabla de tallas real, lo mejor que podemos hacer es quitar SIZE_GRID_ID
+    # del payload para evitar el valor placeholder. Si ML también exige el grid, el item
+    # quedará como error en backlog (requiere que el seller configure una guía de tallas
+    # en su cuenta ML).
+    if status_code == 400 and any(
+        c.get('code') in ('invalid.fashion_grid.grid_id.values',
+                          'missing.fashion_grid.grid_id.values')
+        for c in response.get('cause', [])
+    ):
+        removed = [a for a in payload['attributes'] if a.get('id') == 'SIZE_GRID_ID']
+        if removed:
+            print(f"  [!] SIZE_GRID_ID inválido — quitando y reintentando (valor previo: {removed[0].get('value_name')})")
+            payload['attributes'] = [a for a in payload['attributes'] if a.get('id') != 'SIZE_GRID_ID']
+            response, status_code = ml_api.create_item(payload, token)
+
+    # Retry: atributo de tipo picture con value_name inválido (ej: ENERGY_EFFICIENCY_LABEL='A')
+    # → quitar el atributo y reintentar. ML los valida contra un picture_id real.
+    if status_code == 400:
+        _bad_picture_attrs = set()
+        for c in response.get('cause', []):
+            if c.get('code') == 'item.attribute.value_name.invalid' and 'type picture' in c.get('message', ''):
+                import re as _re
+                m = _re.search(r'Attribute (\w+)', c.get('message', ''))
+                if m:
+                    _bad_picture_attrs.add(m.group(1))
+        if _bad_picture_attrs:
+            print(f"  [!] Atributos tipo picture con valor inválido — quitando: {_bad_picture_attrs}")
+            payload['attributes'] = [a for a in payload['attributes'] if a.get('id') not in _bad_picture_attrs]
+            response, status_code = ml_api.create_item(payload, token)
+
     # Retry: dimensiones de paquete inválidas → quitar todas y reintentar
     if status_code == 400 and any(
         'invalid.seller.package.dimensions' in c.get('code', '')
