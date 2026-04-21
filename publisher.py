@@ -54,13 +54,19 @@ from config import (
     DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD,
 )
 
-# Inicializar BD si hay credenciales configuradas (con reintentos)
-if DB_HOST and DB_NAME and DB_USER:
-    db.set_credentials(DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD)
-    if db.ensure_connection(max_retries=5, base_delay=5):
-        print(f"  [db] BD conectada exitosamente")
-    else:
-        print(f"  [db] Continuando sin BD — el progreso se guardará en archivos locales")
+# Inicializar BD — REQUERIDA: si no conecta, abortar (no procesar nada sin BD)
+if not (DB_HOST and DB_NAME and DB_USER):
+    print("  [db] ERROR — Credenciales de BD no configuradas (DB_HOST/DB_NAME/DB_USER).")
+    print("  [db] El publisher requiere conexión a BD para ejecutarse. Abortando.")
+    sys.exit(1)
+
+db.set_credentials(DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD)
+if db.ensure_connection(max_retries=5, base_delay=5):
+    print(f"  [db] BD conectada exitosamente")
+else:
+    print(f"  [db] ERROR — No se pudo conectar a la BD después de varios intentos.")
+    print(f"  [db] Abortando sin procesar productos. Verifica la conexión y vuelve a ejecutar.")
+    sys.exit(1)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -869,6 +875,12 @@ def main():
         for idx, prod in enumerate(products, 1):
             sku = prod['sku']
             prog_key = f"{cuenta}:{sku}"
+
+            # Verificar conexión a BD antes de cada producto. Si se cae, abortar.
+            if not db.ensure_connection(max_retries=5, base_delay=5):
+                print(f"\n  [db] ERROR — Se perdió la conexión a la BD a mitad del proceso.")
+                print(f"  [db] Abortando para no continuar sin registrar progreso. Restaura la BD y vuelve a ejecutar.")
+                sys.exit(1)
 
             if prog_key in ya_publicados or sku in ya_publicados:
                 print(f"\n  [{idx}/{len(products)}] {sku} — ya publicado en {cuenta}, saltando")

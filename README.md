@@ -43,6 +43,16 @@ Copia `.env.example` a `.env` y configura las variables de entorno necesarias (W
 
 ## Changelog
 
+### 2026-04-21 - Abort-on-DB-failure (fail-hard si no hay conexión a BD)
+
+**Problema:** Cuando la conexión a MySQL fallaba al iniciar (timeout, red caída, credenciales), el publisher continuaba procesando productos sin registrar nada en BD. El progreso se perdía silenciosamente — solo aparecía una advertencia `[db] Advertencia — no se pudo guardar progress en BD` entre productos, pero la corrida seguía adelante.
+
+**Cambios en publisher.py:**
+
+- Si `DB_HOST`/`DB_NAME`/`DB_USER` no están configurados, el publisher aborta con `sys.exit(1)` en lugar de continuar.
+- Si `db.ensure_connection()` falla tras los 5 reintentos (backoff 5s, 10s, 20s, 40s, 80s), el publisher aborta con `sys.exit(1)` en lugar de imprimir una advertencia y seguir.
+- Nuevo health-check antes de cada producto en el loop principal: si `ensure_connection()` falla a mitad de corrida (conexión caída por timeout/red), el publisher aborta inmediatamente sin procesar el siguiente producto. Esto garantiza que no se creen items en ML sin su correspondiente registro en `ml_progress`/`ml_backlog`.
+
 ### 2026-04-21 - Fix SIZE_GRID_ID, ENERGY_EFFICIENCY_LABEL y SHEETS_NUMBER
 
 **Problema 1:** Error 400 `invalid.fashion_grid.grid_id.values` / `missing.fashion_grid.grid_id.values` — categorias de ropa/calzado (MLM112156 Vestidos, MLM112197 Ropa, MLM192717 Calzado) rechazaban el item porque el atributo `SIZE_GRID_ID` se estaba enviando con el valor literal placeholder `"grid_id"` heredado de los atributos WC. Afecto a ROP-0456, ROP-0240, CALZ-0200-TRANS-43, ROP-0465.
