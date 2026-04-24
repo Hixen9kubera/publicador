@@ -150,6 +150,37 @@ def parse_product(wc_product: dict) -> dict:
 
     # Imágenes: URLs de WC (ML las descarga directamente)
     img_urls = [img['src'] for img in images if img.get('src')]
+    # Detalle de imágenes con id + src para cruce con _kubera_editar_imagenes
+    images_detail = [
+        {'id': img.get('id'), 'src': img.get('src')}
+        for img in images
+        if img.get('src')
+    ]
+
+    # Flags de edición IA por imagen: {wc_image_id: {quitar_fondo, traducir_texto, cambiar_modelo}}
+    edit_flags_raw = meta.get('_kubera_editar_imagenes') or []
+    edit_flags_by_id: dict = {}
+    if isinstance(edit_flags_raw, list):
+        for entry in edit_flags_raw:
+            if not isinstance(entry, dict):
+                continue
+            img_id = entry.get('imagen_id')
+            if img_id is None:
+                continue
+            try:
+                img_id = int(img_id)
+            except (TypeError, ValueError):
+                continue
+            edit_flags_by_id[img_id] = {
+                'quitar_fondo':   bool(entry.get('quitar_fondo')),
+                'traducir_texto': bool(entry.get('traducir_texto')),
+                'cambiar_modelo': bool(entry.get('cambiar_modelo')),
+            }
+
+    # Galería por variante (commercekit plugin)
+    commercekit_gallery = meta.get('commercekit_image_gallery') or {}
+    if not isinstance(commercekit_gallery, dict):
+        commercekit_gallery = {}
 
     return {
         'wc_id':           wc_product['id'],
@@ -158,6 +189,9 @@ def parse_product(wc_product: dict) -> dict:
         'price':           float(precio),
         'description':     desc_plain,
         'images':          img_urls,
+        'images_detail':   images_detail,
+        'edit_flags':      edit_flags_by_id,
+        'commercekit_gallery': commercekit_gallery,
         'weight':          wc_product.get('weight', ''),
         'length':          dims.get('length', ''),
         'width':           dims.get('width', ''),

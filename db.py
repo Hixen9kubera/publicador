@@ -138,6 +138,37 @@ CREATE TABLE IF NOT EXISTS ml_progress (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Estado de publicaciones (reemplaza progress.json)';
 """
 
+CREATE_IMAGE_EDIT_BACKLOG_SQL = """
+CREATE TABLE IF NOT EXISTS ml_image_edit_backlog (
+    id                  INT AUTO_INCREMENT PRIMARY KEY,
+    run_key             VARCHAR(150) NOT NULL      COMMENT 'cuenta:sku o sku (pre-ML)',
+    cuenta              VARCHAR(50)  DEFAULT NULL,
+    sku                 VARCHAR(100) NOT NULL,
+    wc_id               INT          DEFAULT NULL,
+    wc_image_id         INT          NOT NULL      COMMENT 'ID original en WP Media',
+    src_url             TEXT         NOT NULL,
+    flag_quitar_fondo   TINYINT(1)   NOT NULL DEFAULT 0,
+    flag_traducir_texto TINYINT(1)   NOT NULL DEFAULT 0,
+    flag_cambiar_modelo TINYINT(1)   NOT NULL DEFAULT 0,
+    action              VARCHAR(20)  NOT NULL      COMMENT 'edited|skip_no_flags|error',
+    person_desc         TEXT         DEFAULT NULL  COMMENT 'respuesta describe_person (solo si cambiar_modelo=1)',
+    prompt_used         TEXT         DEFAULT NULL  COMMENT 'prompt compuesto enviado a Gemini',
+    gemini_model        VARCHAR(60)  DEFAULT NULL,
+    gemini_success      TINYINT(1)   NOT NULL DEFAULT 0,
+    gemini_error        TEXT         DEFAULT NULL,
+    bytes_in            INT          DEFAULT NULL,
+    bytes_out           INT          DEFAULT NULL,
+    wp_media_id_new     INT          DEFAULT NULL  COMMENT 'ID nuevo en WP Media tras upload',
+    wp_url_new          TEXT         DEFAULT NULL,
+    ml_picture_id       VARCHAR(60)  DEFAULT NULL  COMMENT 'picture_id en ML (último registrado)',
+    created_at          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_sku       (sku),
+    INDEX idx_wc_id     (wc_id),
+    INDEX idx_wc_img    (wc_image_id),
+    INDEX idx_action    (action)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Backlog de edición IA de imágenes por SKU';
+"""
+
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS ml_backlog (
     id               INT AUTO_INCREMENT PRIMARY KEY,
@@ -173,8 +204,9 @@ def create_tables():
     cur.execute(CREATE_TABLE_SQL)
     cur.execute(CREATE_PROGRESS_SQL)
     cur.execute(CREATE_TOKENS_SQL)
+    cur.execute(CREATE_IMAGE_EDIT_BACKLOG_SQL)
     cur.close()
-    print("  [db] Tablas ml_backlog + ml_progress + ml_tokens listas.")
+    print("  [db] Tablas ml_backlog + ml_progress + ml_tokens + ml_image_edit_backlog listas.")
 
 
 # ── Tokens ML (persistencia en producción) ────────────────────────────────────
@@ -382,3 +414,110 @@ def save_backlog_db(run_key: str, entry: dict):
         cur.close()
     except Exception as e:
         print(f"  [db] Advertencia — no se pudo guardar en BD: {e}")
+
+
+# ── Image edit backlog ────────────────────────────────────────────────────────
+
+INSERT_IMAGE_EDIT_SQL = """
+INSERT INTO ml_image_edit_backlog
+    (run_key, cuenta, sku, wc_id, wc_image_id, src_url,
+     flag_quitar_fondo, flag_traducir_texto, flag_cambiar_modelo,
+     action, person_desc, prompt_used, gemini_model,
+     gemini_success, gemini_error, bytes_in, bytes_out,
+     wp_media_id_new, wp_url_new, ml_picture_id)
+VALUES
+    (%s, %s, %s, %s, %s, %s,
+     %s, %s, %s,
+     %s, %s, %s, %s,
+     %s, %s, %s, %s,
+     %s, %s, %s)
+"""
+
+
+def save_image_edit_backlog(entry: dict) -> int | None:
+    """
+    Inserta una fila en ml_image_edit_backlog y retorna el id insertado.
+    Silencia errores para no interrumpir el pipeline.
+    """
+    try:
+        conn = _get_conn()
+        cur  = conn.cursor()
+        cur.execute(INSERT_IMAGE_EDIT_SQL, (
+            entry.get('run_key', ''),
+            entry.get('cuenta'),
+            entry.get('sku', ''),
+            entry.get('wc_id'),
+            entry.get('wc_image_id'),
+            entry.get('src_url', ''),
+            int(bool(entry.get('flag_quitar_fondo'))),
+            int(bool(entry.get('flag_traducir_texto'))),
+            int(bool(entry.get('flag_cambiar_modelo'))),
+            entry.get('action', 'error'),
+            entry.get('person_desc'),
+            entry.get('prompt_used'),
+            entry.get('gemini_model'),
+            int(bool(entry.get('gemini_success'))),
+            entry.get('gemini_error'),
+            entry.get('bytes_in'),
+            entry.get('bytes_out'),
+            entry.get('wp_media_id_new'),
+            entry.get('wp_url_new'),
+            entry.get('ml_picture_id'),
+        ))
+        new_id = cur.lastrowid
+        cur.close()
+        return new_id
+    except Exception as e:
+        print(f"  [db] Advertencia — no se pudo guardar image_edit_backlog: {e}")
+        return None
+
+
+def load_edit_cache(wc_id: int) -> dict:
+    """
+    Retorna {wc_image_id: {wp_media_id_new, wp_url_new}} para las imágenes
+    de este wc_id que YA fueron editadas y subidas a WP Media en corridas previas.
+    Permite reanudar sin re-ejecutar Gemini.
+    """
+    try:
+        conn = _get_conn()
+        cur  = conn.cursor(dictionary=True)
+        cur.execute("""
+            SELECT wc_image_id, wp_media_id_new, wp_url_new
+            FROM ml_image_edit_backlog
+            WHERE wc_id = %s
+              AND action = 'edited'
+              AND wp_media_id_new IS NOT NULL
+              AND id = (
+                SELECT MAX(id) FROM ml_image_edit_backlog
+                WHERE wc_id = ml_image_edit_backlog.wc_id
+                  AND wc_image_id = ml_image_edit_backlog.wc_image_id
+                  AND action = 'edited'
+                  AND wp_media_id_new IS NOT NULL
+              )
+        """, (wc_id,))
+        rows = cur.fetchall()
+        cur.close()
+        return {
+            r['wc_image_id']: {
+                'wp_media_id_new': r['wp_media_id_new'],
+                'wp_url_new':      r['wp_url_new'],
+            }
+            for r in rows
+        }
+    except Exception as e:
+        print(f"  [db] No se pudo cargar edit_cache de wc_id={wc_id}: {e}")
+        return {}
+
+
+def update_image_edit_ml_picture(backlog_id: int, ml_picture_id: str):
+    """Actualiza ml_picture_id en una fila existente de ml_image_edit_backlog."""
+    try:
+        conn = _get_conn()
+        cur  = conn.cursor()
+        cur.execute(
+            "UPDATE ml_image_edit_backlog SET ml_picture_id = %s WHERE id = %s",
+            (ml_picture_id, backlog_id),
+        )
+        cur.close()
+    except Exception as e:
+        print(f"  [db] Advertencia — no se pudo actualizar ml_picture_id: {e}")

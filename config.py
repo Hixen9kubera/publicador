@@ -12,6 +12,14 @@ WC_URL    = os.environ["WC_URL"]
 WC_KEY    = os.environ["WC_KEY"]
 WC_SECRET = os.environ["WC_SECRET"]
 
+# WP user/pass para XML-RPC (upload de imágenes editadas a WP Media)
+WC_WP_USER = os.environ.get("WC_WP_USER", "brandon@kubera.mx")
+WC_WP_PASS = os.environ.get("WC_WP_PASS", "")
+
+# ── Gemini (edición IA de imágenes) ────────────────────────────────────────────
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL   = os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
+
 # ── MercadoLibre ───────────────────────────────────────────────────────────────
 ML_API_BASE  = "https://api.mercadolibre.com"
 ML_SITE_ID   = "MLM"

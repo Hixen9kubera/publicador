@@ -46,6 +46,8 @@ import wc_api
 from wc_api import update_product_status
 from attribute_mapper import build_attributes, build_secondary_attributes
 import db
+import image_editor
+import wc_media
 from config import (
     DELAY_ENTRE_PRODUCTOS, MAX_IMAGENES,
     DEFAULT_CURRENCY, DEFAULT_LISTING_TYPE, DEFAULT_CONDITION,
@@ -63,6 +65,10 @@ if not (DB_HOST and DB_NAME and DB_USER):
 db.set_credentials(DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD)
 if db.ensure_connection(max_retries=5, base_delay=5):
     print(f"  [db] BD conectada exitosamente")
+    try:
+        db.create_tables()
+    except Exception as _e:
+        print(f"  [db] Advertencia — create_tables falló: {_e}")
 else:
     print(f"  [db] ERROR — No se pudo conectar a la BD después de varios intentos.")
     print(f"  [db] Abortando sin procesar productos. Verifica la conexión y vuelve a ejecutar.")
@@ -198,6 +204,169 @@ def build_sale_terms(category_id: str, token: str) -> list:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# PREPROCESS IMÁGENES — Edición IA + upload a WP Media (una sola vez por SKU)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def preprocess_product_images(prod: dict) -> dict:
+    """
+    Por cada imagen del producto:
+      - Si tiene los 3 flags en False → usa la URL original
+      - Si tiene algún flag True → descarga, edita con Gemini, sube a WP Media UNA vez
+      - Si ya fue editada en una corrida previa (ml_image_edit_backlog) → reusa
+
+    Guarda fila por imagen en ml_image_edit_backlog (edited | skip_no_flags | error).
+    NUNCA guarda bytes en disco local.
+
+    Retorna:
+      {
+        'urls_for_ml': [str, ...],       # URLs a pre-subir a ML (nuevas o originales)
+        'id_map':      {old_wc_id: new_wc_id},  # sólo imágenes editadas
+        'gallery':     {...},            # commercekit_image_gallery (sin modificar)
+        'all_skip':    bool              # True si NINGUNA imagen necesitó edición
+      }
+    """
+    from datetime import datetime as _dt
+
+    sku          = prod['sku']
+    wc_id        = prod['wc_id']
+    edit_flags   = prod.get('edit_flags', {}) or {}
+    images_det   = prod.get('images_detail', []) or []
+    gallery      = prod.get('commercekit_gallery', {}) or {}
+
+    result = {
+        'urls_for_ml': [],
+        'id_map':      {},
+        'gallery':     gallery,
+        'all_skip':    True,
+        'errors':      [],       # detalles de imágenes con error IA
+        'has_errors':  False,    # si True → NO publicar en ML
+    }
+
+    if not images_det:
+        return result
+
+    prior_cache = db.load_edit_cache(wc_id) if wc_id else {}
+    n = len(images_det)
+
+    print(f"\n  ── Preprocess imágenes IA ({n} imágenes) — SKU {sku} ──")
+
+    for i, img in enumerate(images_det, 1):
+        wc_img_id = img.get('id')
+        src_url   = img.get('src') or ''
+        if not src_url:
+            continue
+
+        flags = edit_flags.get(wc_img_id) or {}
+        flags_active = bool(
+            flags.get('quitar_fondo') or
+            flags.get('traducir_texto') or
+            flags.get('cambiar_modelo')
+        )
+
+        # ── Sin flags activos → usar URL original ──────────────────────────
+        if not flags_active:
+            print(f"  [IMG {i}/{n}] wc_img={wc_img_id} | sin flags → sube original tal cual")
+            result['urls_for_ml'].append(src_url)
+            db.save_image_edit_backlog({
+                'run_key':     sku,
+                'sku':         sku,
+                'wc_id':       wc_id,
+                'wc_image_id': wc_img_id or 0,
+                'src_url':     src_url,
+                'flag_quitar_fondo':   False,
+                'flag_traducir_texto': False,
+                'flag_cambiar_modelo': False,
+                'action':      'skip_no_flags',
+            })
+            continue
+
+        # ── Ya editada previamente → reusar (sin re-gastar Gemini) ─────────
+        if wc_img_id in prior_cache:
+            cached = prior_cache[wc_img_id]
+            print(f"  [IMG {i}/{n}] wc_img={wc_img_id} | flags: {image_editor.format_flags_line(flags)}")
+            print(f"    └─ ✨ ya editada (wp_media_id={cached['wp_media_id_new']}) → reusando de BD")
+            result['urls_for_ml'].append(cached['wp_url_new'])
+            result['id_map'][wc_img_id] = cached['wp_media_id_new']
+            result['all_skip'] = False
+            continue
+
+        # ── Editar con Gemini + subir a WP Media ───────────────────────────
+        print(f"  [IMG {i}/{n}] wc_img={wc_img_id} | flags: {image_editor.format_flags_line(flags)}")
+        edited_bytes, info = image_editor.process_image(src_url, flags)
+        info['run_key']     = sku
+        info['sku']         = sku
+        info['wc_id']       = wc_id
+        info['wc_image_id'] = wc_img_id or 0
+
+        if info.get('person_desc'):
+            print(f"    └─ describe_person: '{info['person_desc']}'")
+        if info.get('prompt_used'):
+            p = info['prompt_used']
+            print(f"    └─ prompt: {p[:180]}{'...' if len(p) > 180 else ''}")
+
+        if edited_bytes is None:
+            err = info.get('gemini_error') or 'unknown'
+            print(f"    └─ ✗ GEMINI FAIL tras 3 reintentos: {err}")
+            print(f"    └─ ⛔ producto NO se publicará hasta que Gemini funcione")
+            bl_id = db.save_image_edit_backlog(info)
+            print(f"    └─ backlog row: ml_image_edit_backlog.id={bl_id} (action=error)")
+            result['errors'].append({
+                'wc_image_id': wc_img_id,
+                'flags':       image_editor.format_flags_line(flags),
+                'error':       err[:200],
+                'backlog_id':  bl_id,
+            })
+            result['has_errors'] = True
+            result['urls_for_ml'].append(src_url)  # placeholder; no se usará porque no publicamos
+            continue
+
+        kb_in  = (info.get('bytes_in')  or 0) // 1024
+        kb_out = (info.get('bytes_out') or 0) // 1024
+        print(f"    └─ Gemini {info.get('gemini_model')} → OK ({kb_in}KB → {kb_out}KB)")
+
+        filename = f"{sku}_img{wc_img_id}_{int(_dt.now().timestamp())}.jpg"
+        wp = wc_media.upload_edited_image(edited_bytes, filename)
+        if wp is None:
+            err = 'wp_upload_failed'
+            info['gemini_error'] = (info.get('gemini_error') or '') + f' | {err}'
+            info['action'] = 'error'
+            print(f"    └─ ✗ WP Media upload falló")
+            print(f"    └─ ⛔ producto NO se publicará (imagen editada pero no almacenada en WP)")
+            bl_id = db.save_image_edit_backlog(info)
+            print(f"    └─ backlog row: ml_image_edit_backlog.id={bl_id} (action=error)")
+            result['errors'].append({
+                'wc_image_id': wc_img_id,
+                'flags':       image_editor.format_flags_line(flags),
+                'error':       err,
+                'backlog_id':  bl_id,
+            })
+            result['has_errors'] = True
+            result['urls_for_ml'].append(src_url)  # placeholder; no se usará
+            continue
+
+        info['wp_media_id_new'] = wp['id']
+        info['wp_url_new']      = wp['url']
+        bl_id = db.save_image_edit_backlog(info)
+        print(f"    └─ WP Media: id={wp['id']} url={wp['url']}")
+        print(f"    └─ backlog row: ml_image_edit_backlog.id={bl_id}")
+
+        result['urls_for_ml'].append(wp['url'])
+        result['id_map'][wc_img_id] = wp['id']
+        result['all_skip'] = False
+
+    n_edit = len(result['id_map'])
+    n_err  = len(result['errors'])
+    if result['has_errors']:
+        print(f"  Preprocess: {n_err} imagen(es) con ERROR — SKU {sku} NO se publicará hasta corregir")
+    elif result['all_skip']:
+        print(f"  Preprocess: 0 editadas / {n} originales → se suben todas tal cual a ML")
+    else:
+        print(f"  Preprocess: {n_edit} editada(s) + {n - n_edit} original(es) = {n} total a ML")
+
+    return result
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # CONSTRUCCIÓN DEL PAYLOAD ML
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -323,7 +492,8 @@ def build_payload(prod: dict, token: str, dry_run: bool = False) -> dict | None:
     free_shipping = prod['price'] > FREE_SHIPPING_MIN
 
     # Pre-subir imágenes a ML para obtener picture_ids (más rápido que URLs externas)
-    raw_images = prod['images'][:MAX_IMAGENES]
+    # Si hubo preprocess IA, usa las URLs nuevas (WP Media); si no, las originales.
+    raw_images = (prod.get('images_for_ml') or prod['images'])[:MAX_IMAGENES]
     picture_ids = []
     if raw_images and not dry_run:
         print(f"  Pre-subiendo {len(raw_images)} imágenes a ML...")
@@ -868,6 +1038,9 @@ def main():
         products = products[:args.limit]
         print(f"  Limitando a {args.limit} producto(s)")
 
+    # Índice por SKU para acceso rápido en el sync post-publicación
+    prod_by_sku: dict = {p['sku']: p for p in products}
+
     print(f"  [✓] {len(products)} productos × {len(cuentas)} cuenta(s) = {len(products)*len(cuentas)} publicaciones\n")
 
     # Loop por cuenta
@@ -929,6 +1102,73 @@ def main():
 
             print(f"\n  [{idx}/{len(products)}]", end='')
 
+            # Preprocess IA de imágenes (lazy — solo la primera cuenta lo ejecuta,
+            # las siguientes reusan prod['images_for_ml']). Skip en dry_run.
+            if 'images_for_ml' not in prod and not args.dry_run:
+                try:
+                    preproc = preprocess_product_images(prod)
+                    prod['_preprocess']   = preproc
+                    prod['images_for_ml'] = preproc['urls_for_ml']
+                except Exception as e:
+                    # Error crítico de preprocess (Gemini API key faltante, import error, etc.).
+                    # Si el producto tenía flags activos, bloquear publicación. Si no tenía, seguir.
+                    has_active_flags = any(
+                        bool(f.get('quitar_fondo') or f.get('traducir_texto') or f.get('cambiar_modelo'))
+                        for f in (prod.get('edit_flags') or {}).values()
+                    )
+                    print(f"  [preprocess] EXCEPCIÓN en {sku}: {e}")
+                    if has_active_flags:
+                        print(f"  [preprocess] ⛔ {sku} tiene flags IA activos — NO se publicará")
+                        prod['_preprocess'] = {
+                            'id_map': {}, 'gallery': prod.get('commercekit_gallery') or {},
+                            'all_skip': False, 'has_errors': True,
+                            'errors': [{'wc_image_id': None, 'flags': 'N/A',
+                                        'error': f'preprocess_exception: {e}'[:200]}],
+                        }
+                    else:
+                        print(f"  [preprocess] Sin flags activos → continuando con imágenes originales")
+                        prod['_preprocess'] = {
+                            'id_map': {}, 'gallery': prod.get('commercekit_gallery') or {},
+                            'all_skip': True, 'has_errors': False, 'errors': [],
+                        }
+                    prod['images_for_ml'] = prod['images']
+
+            # ── Gate: si preprocess tiene errores → NO publicar, registrar en BD ──
+            preproc_errors = prod.get('_preprocess', {}).get('has_errors')
+            if preproc_errors and not args.dry_run:
+                errs = prod['_preprocess'].get('errors') or []
+                first_err = (errs[0]['error'] if errs else 'unknown')[:120]
+                n_err = len(errs)
+                error_label = f"GEMINI_ERROR: {n_err} imagen(es) fallaron — {first_err}"
+                print(f"  [✗] {sku} — PUBLICACIÓN BLOQUEADA: {error_label}")
+                for e in errs:
+                    print(f"    - wc_img={e.get('wc_image_id')} flags={e.get('flags')} "
+                          f"backlog_id={e.get('backlog_id')} → {e.get('error')}")
+
+                fail_result = {
+                    'success':      False,
+                    'sku':          sku,
+                    'wc_id':        prod['wc_id'],
+                    'error':        error_label,
+                    'gemini_error': True,
+                    'cuenta':       cuenta,
+                }
+                progress[prog_key] = fail_result
+                save_progress(progress, prog_key=prog_key, entry=fail_result)
+                save_backlog(prog_key, {
+                    'timestamp': datetime.now().isoformat(),
+                    'cuenta':    cuenta,
+                    'wc_id':     prod['wc_id'],
+                    'result':    fail_result,
+                })
+                stats['fallidos'] += 1
+                errores_resumen.append({
+                    'sku':    sku,
+                    'cuenta': cuenta,
+                    'error':  error_label,
+                })
+                continue
+
             result = publish_product(prod, token, dry_run=args.dry_run, cuenta=cuenta)
             result['cuenta'] = cuenta
 
@@ -975,6 +1215,23 @@ def main():
             if db.is_published(c, sku):
                 cuentas_ok.add(c)
         if cuentas_ok >= cuentas_set:
+            # Antes de marcar 'publish' en WC, si hubo ediciones IA, sincronizar
+            # los nuevos wp_media_id en los 3 lugares: images[] del padre,
+            # commercekit_image_gallery (CSVs por variante), y image.id de cada
+            # variación hija. Sólo se ejecuta cuando id_map no está vacío.
+            prod_ref = prod_by_sku.get(sku, {})
+            preproc  = prod_ref.get('_preprocess') or {}
+            id_map   = preproc.get('id_map') or {}
+            if id_map:
+                print(f"  [wc_media] {sku}: sincronizando {len(id_map)} imagen(es) editada(s) en WC...")
+                sync_res = wc_media.sync_edited_images(
+                    wc_id_por_sku[sku], id_map, preproc.get('gallery')
+                )
+                print(f"  [wc_media] {sku}: parent={sync_res['parent_ok']} "
+                      f"gallery={sync_res['gallery_updated']} "
+                      f"variations={sync_res['variations_ok']}/"
+                      f"{sync_res['variations_ok']+sync_res['variations_fail']}")
+
             wc_ok = update_product_status(wc_id_por_sku[sku], 'publish')
             if wc_ok:
                 print(f"  [✓] {sku} → WooCommerce 'publish' (todas las cuentas OK)")

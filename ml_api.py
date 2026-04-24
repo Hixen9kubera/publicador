@@ -257,6 +257,32 @@ def preupload_picture(image_url: str, token: str) -> str | None:
         return None
 
 
+def preupload_picture_from_bytes(
+    image_bytes: bytes,
+    token: str,
+    filename: str = "image.jpg",
+    mime: str = "image/jpeg",
+) -> str | None:
+    """
+    Pre-sube bytes directamente a ML (sin archivo local).
+    Si la imagen es menor a 500px, la escala antes de subir.
+    Retorna el picture_id de ML, o None si falla.
+    """
+    try:
+        image_data = _ensure_min_size(image_bytes)
+        resp = requests.post(
+            f"{ML_API_BASE}/pictures",
+            headers={"Authorization": f"Bearer {token}"},
+            files={"file": (filename, image_data, mime)},
+            timeout=60
+        )
+        if resp.status_code == 201:
+            return resp.json().get('id')
+        return None
+    except Exception:
+        return None
+
+
 def create_item(payload: dict, token: str) -> tuple[dict, int]:
     """
     Crea un item en MercadoLibre.
