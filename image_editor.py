@@ -236,12 +236,27 @@ def gemini_edit_bytes(
                 contents=[prompt, img_part],
                 config=cfg,
             )
+            texts = []
             if resp.candidates and resp.candidates[0].content:
                 for part in (resp.candidates[0].content.parts or []):
                     inline = getattr(part, "inline_data", None)
                     if inline and getattr(inline, "data", None):
                         return inline.data, None
-            last_err = "sin imagen en la respuesta"
+                    txt = getattr(part, "text", None)
+                    if txt:
+                        texts.append(txt.strip())
+            # Sin imagen → reporta el texto devuelto por Gemini si lo hay
+            finish = None
+            try:
+                finish = str(resp.candidates[0].finish_reason) if resp.candidates else None
+            except Exception:
+                pass
+            if texts:
+                sample = " | ".join(texts)[:300]
+                last_err = f"sin imagen (finish={finish}) — texto: {sample}"
+            else:
+                last_err = f"sin imagen en la respuesta (finish={finish})"
+            log.warning(f"    Gemini intento {attempt + 1}: {last_err}")
         except Exception as e:
             last_err = str(e)[:200]
             log.warning(f"    Gemini intento {attempt + 1} falló: {last_err}")
