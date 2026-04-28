@@ -43,6 +43,34 @@ Copia `.env.example` a `.env` y configura las variables de entorno necesarias (W
 
 ## Changelog
 
+### 2026-04-28 - NEEDS_MANUAL no consume cupo del --limit (parche temporal grids)
+
+**Problema:** Mientras se resuelve la creación de guías de tallas vía API (ML expone `POST /catalog/charts` pero requiere `main_attribute` específico por dominio que la API de discovery no expone), los 10 SKUs de ropa/calzado marcados con `NEEDS_MANUAL_CONFIG: GRID_REQUERIDO` quedan en la BD esperando que el seller cree la guía manualmente en el dashboard ML. Hasta entonces, esos SKUs **consumían cupo del `--limit 8`**: si los primeros 8 productos del pool eran todos NEEDS_MANUAL, la corrida no procesaba ningún producto nuevo.
+
+**Cambios en publisher.py:**
+
+- El slice `products[:args.limit]` ya **no se aplica al inicio** (era global). Ahora el límite se aplica **dentro del loop por cuenta**, después de descartar los SKUs ya publicados y los marcados como `NEEDS_MANUAL_CONFIG`.
+- Resultado: un SKU bloqueado por config manual no consume slot. Si `--limit=8` y 3 SKUs del pool son NEEDS_MANUAL, la corrida procesa 8 nuevos publicables (no 5).
+- Nuevo log al inicio de cada cuenta: `Pool 50 → publicables 42 (descartados 8: ya pub + needs_manual) → procesando 8`.
+
+**Persistencia para revisión:** los SKUs marcados quedan en `ml_progress.error` con prefijo `NEEDS_MANUAL_CONFIG:` y motivo (`GRID_REQUERIDO`, `IMAGES_TOO_SMALL`, `TITLE_GENDER_MISMATCH`, `GTIN_REAL_REQUERIDO`, `ME1_INACTIVO`). Para revisar pendientes:
+
+```sql
+SELECT cuenta, sku, error, updated_at
+FROM ml_progress
+WHERE error LIKE 'NEEDS_MANUAL_CONFIG%'
+ORDER BY error, cuenta, sku;
+```
+
+Cuando el seller resuelva el motivo (crear guía de tallas en dashboard ML, subir mejor imagen en WC, etc.), borrar la fila correspondiente en `ml_progress` y el publisher la volverá a intentar en la siguiente corrida.
+
+**Estado de descubrimiento de `POST /catalog/charts` (sigue pendiente):**
+
+- Endpoint confirmado existe.
+- `domain_id` correcto se obtiene de `/categories/{cat_id}`.`settings.catalog_domain` (sin prefijo `MLM-`).
+- Requiere `attributes` filtros (siempre `GENDER` en ropa/calzado), `main_attribute` (no expuesto por dominio en discovery — pendiente de descubrir) y `rows` con medidas obligatorias (ej: `FOOT_LENGTH` para sandalias).
+- Plan: crear UNA guía manual en dashboard, leer su JSON con `GET /catalog/charts/{id}`, replicar el formato verificado para crear las demás vía API.
+
 ### 2026-04-28 - Subir cadencia a 8/hora y manejar invalid.title.gender
 
 **Cambios:**

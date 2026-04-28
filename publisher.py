@@ -1053,14 +1053,18 @@ def main():
             print(f"  SKU '{args.sku}' no encontrado.")
             sys.exit(0)
 
+    # NOTA: el slice por --limit se aplica MÁS ABAJO, dentro del loop por cuenta,
+    # DESPUÉS de descartar SKUs ya publicados y los marcados como NEEDS_MANUAL_CONFIG.
+    # Así el límite cuenta solo "intentos reales" y los saltos por error manual no
+    # consumen el cupo (ej: si limit=8 y 3 SKUs son NEEDS_MANUAL, se procesan 8 nuevos
+    # en lugar de quedarse con solo 5).
     if args.limit:
-        products = products[:args.limit]
-        print(f"  Limitando a {args.limit} producto(s)")
+        print(f"  Límite por cuenta: {args.limit} producto(s) publicables (NEEDS_MANUAL no consume cupo)")
 
     # Índice por SKU para acceso rápido en el sync post-publicación
     prod_by_sku: dict = {p['sku']: p for p in products}
 
-    print(f"  [✓] {len(products)} productos × {len(cuentas)} cuenta(s) = {len(products)*len(cuentas)} publicaciones\n")
+    print(f"  [✓] {len(products)} productos en pool × {len(cuentas)} cuenta(s)\n")
 
     # Loop por cuenta
     stats = {'exitosos': 0, 'saltados': 0, 'fallidos': 0}
@@ -1093,9 +1097,28 @@ def main():
                         and (v.get('error') or '').startswith('NEEDS_MANUAL_CONFIG')}
         print(f"  Progreso previo: {len(ya_publicados)} ya publicados en {cuenta}")
         if needs_manual:
-            print(f"  Saltando {len(needs_manual)} SKU(s) con error no-recuperable (requieren config manual en ML)")
+            print(f"  En pool {len(needs_manual)} SKU(s) marcados NEEDS_MANUAL — no consumen cupo del límite")
 
-        for idx, prod in enumerate(products, 1):
+        # Filtrar productos publicables EN ESTA CUENTA: descartar ya publicados
+        # y los marcados como NEEDS_MANUAL_CONFIG. Aplicar --limit aquí (por cuenta)
+        # para que el cupo cuente solo intentos reales.
+        def _es_publicable(p):
+            pk = f"{cuenta}:{p['sku']}"
+            if pk in needs_manual:
+                return False
+            if pk in ya_publicados or p['sku'] in ya_publicados:
+                return False
+            return True
+
+        products_publicables = [p for p in products if _es_publicable(p)]
+        descartados = len(products) - len(products_publicables)
+        if args.limit:
+            products_iter = products_publicables[:args.limit]
+        else:
+            products_iter = products_publicables
+        print(f"  Pool {len(products)} → publicables {len(products_publicables)} (descartados {descartados}: ya pub + needs_manual) → procesando {len(products_iter)}")
+
+        for idx, prod in enumerate(products_iter, 1):
             sku = prod['sku']
             prog_key = f"{cuenta}:{sku}"
 
@@ -1105,21 +1128,22 @@ def main():
                 print(f"  [db] Abortando para no continuar sin registrar progreso. Restaura la BD y vuelve a ejecutar.")
                 sys.exit(1)
 
+            # Safety: estos dos branches no deberían dispararse porque pre-filtré
+            # en products_iter, pero los dejo por defensa por si carga progreso vieja.
             if prog_key in needs_manual:
-                print(f"\n  [{idx}/{len(products)}] {sku} — requiere config manual en ML, saltando")
+                print(f"\n  [{idx}/{len(products_iter)}] {sku} — requiere config manual en ML, saltando")
                 stats['saltados'] += 1
                 wc_id_por_sku[sku] = prod['wc_id']
                 continue
 
             if prog_key in ya_publicados or sku in ya_publicados:
-                print(f"\n  [{idx}/{len(products)}] {sku} — ya publicado en {cuenta}, saltando")
+                print(f"\n  [{idx}/{len(products_iter)}] {sku} — ya publicado en {cuenta}, saltando")
                 stats['saltados'] += 1
-                # Registrar wc_id para verificar al final si todas las cuentas ya publicaron
                 wc_id_por_sku[sku] = prod['wc_id']
                 exitosos_por_sku.setdefault(sku, set()).add(cuenta)
                 continue
 
-            print(f"\n  [{idx}/{len(products)}]", end='')
+            print(f"\n  [{idx}/{len(products_iter)}]", end='')
 
             # Preprocess IA de imágenes (lazy — solo la primera cuenta lo ejecuta,
             # las siguientes reusan prod['images_for_ml']). Skip en dry_run.
@@ -1216,7 +1240,7 @@ def main():
                     'error':  result.get('error', 'desconocido'),
                 })
 
-            if idx < len(products) and not args.dry_run:
+            if idx < len(products_iter) and not args.dry_run:
                 print(f"\n  Esperando {args.delay}s antes del siguiente...")
                 time.sleep(args.delay)
 
