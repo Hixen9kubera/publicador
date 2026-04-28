@@ -43,6 +43,19 @@ Copia `.env.example` a `.env` y configura las variables de entorno necesarias (W
 
 ## Changelog
 
+### 2026-04-28 - Subir cadencia a 8/hora y manejar invalid.title.gender
+
+**Cambios:**
+
+- **scheduler.py**: `CMD_ARGS` ahora pasa `--limit 8` (antes `5`). El cron sigue corriendo cada hora, pero procesa hasta 8 productos por cuenta por corrida (16 totales/hora).
+- **publisher.py — nuevo retry para `invalid.title.gender`**: cuando ML rechaza el item porque el título no concuerda con el atributo `GENDER` (ej: ROP-0197 con GENDER mal asignado), el publisher quita el atributo `GENDER`/`GENDER_NAME` del payload y reintenta — ML lo infiere del título. Si el retry vuelve a fallar, el item se marca con `NEEDS_MANUAL_CONFIG: TITLE_GENDER_MISMATCH` y se salta en corridas futuras.
+- **publisher.py — `item.pictures.invalid_size` como NEEDS_MANUAL_CONFIG**: el retry de re-preupload con escalado Pillow ya existía; ahora si las imágenes siguen siendo demasiado pequeñas tras el escalado (URLs irrecuperables o resolución muy baja), el item se marca con `NEEDS_MANUAL_CONFIG: IMAGES_TOO_SMALL` para que el seller suba imágenes ≥500×250 px en WooCommerce.
+
+**Estado de errores BD al 2026-04-28:**
+
+- `ml_progress`: 389 OK / 13 errores por cuenta. Los 13 errores ya están todos clasificados como `NEEDS_MANUAL_CONFIG` (10 GRID_REQUERIDO + 1 GTIN_REAL_REQUERIDO + 2 ROP-0197 que tras este deploy quedarán como TITLE_GENDER_MISMATCH).
+- `ml_backlog` últimos 2 días: 28 × `invalid.title.gender` (ROP-0197) + 6 × `item.pictures.invalid_size` (ROP-0197-NEG-XL) — ambos cubiertos por este deploy.
+
 ### 2026-04-21 - Saltar SKUs con errores no-recuperables (NEEDS_MANUAL_CONFIG)
 
 **Problema:** Después del deploy que skipea `SIZE_GRID_ID` con valor placeholder, 4 SKUs de ropa/calzado (ROP-0456, ROP-0240, ROP-0465, CALZ-0200-TRANS-43) seguían fallando con `missing.fashion_grid.grid_id.values` porque la categoría de ML **exige** una guía de tallas. Estos errores NO son bugs del publisher — requieren que el seller configure una guía de tallas en su cuenta ML. Sin embargo, el cron los reintentaba cada hora contaminando el backlog con errores repetitivos (6 errores × hora × 2 cuentas).

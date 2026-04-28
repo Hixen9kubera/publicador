@@ -676,6 +676,19 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
             payload['pictures'] = new_pictures
             response, status_code = ml_api.create_item(payload, token)
 
+    # Retry: título no concuerda con el atributo GENDER (ej: ROP-0197 con GENDER mal asignado).
+    # Quitar GENDER del payload — ML lo infiere del título o queda como omitido.
+    if status_code == 400 and any(
+        c.get('code') == 'invalid.title.gender'
+        for c in response.get('cause', [])
+    ):
+        _removed = [a for a in payload['attributes'] if a.get('id') in ('GENDER', 'GENDER_NAME')]
+        if _removed:
+            print(f"  [!] Title/gender mismatch — quitando atributo GENDER y reintentando")
+            payload['attributes'] = [a for a in payload['attributes']
+                                     if a.get('id') not in ('GENDER', 'GENDER_NAME')]
+            response, status_code = ml_api.create_item(payload, token)
+
     # Retry: SIZE_GRID_ID inválido o faltante (categorías de ropa / calzado con fashion_grid).
     # Sin acceso a una tabla de tallas real, lo mejor que podemos hacer es quitar SIZE_GRID_ID
     # del payload para evitar el valor placeholder. Si ML también exige el grid, el item
@@ -803,7 +816,9 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
         needs_manual = any(
             c.get('code') in ('missing.fashion_grid.grid_id.values',
                               'invalid.fashion_grid.grid_id.values',
-                              'shipping.lost_me1_by_user')
+                              'shipping.lost_me1_by_user',
+                              'invalid.title.gender',
+                              'item.pictures.invalid_size')
             for c in response.get('cause', [])
         )
         manual_reasons = []
@@ -813,6 +828,10 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
                 manual_reasons.append('GRID_REQUERIDO (configurar guía de tallas en ML)')
             elif code == 'shipping.lost_me1_by_user':
                 manual_reasons.append('ME1_INACTIVO (activar Mercado Envíos 1 en dashboard ML)')
+            elif code == 'invalid.title.gender':
+                manual_reasons.append('TITLE_GENDER_MISMATCH (revisar título y atributo GENDER del producto en WC)')
+            elif code == 'item.pictures.invalid_size':
+                manual_reasons.append('IMAGES_TOO_SMALL (subir imágenes ≥500x250 px al producto en WC)')
         if is_gtin_error:
             print(f"  [✗] Error GTIN — la cuenta {cuenta} requiere código de barras real para {sku}")
         elif needs_manual:

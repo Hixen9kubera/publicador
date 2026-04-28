@@ -41,7 +41,7 @@ TIMEZONE       = 'America/Mexico_City'
 DEFAULT_HORA   = '13:00'
 
 # Comando que se ejecutará diariamente
-CMD_ARGS = ['--todas-cuentas', '--ready', '--limit', '5']
+CMD_ARGS = ['--todas-cuentas', '--ready', '--limit', '8']
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
