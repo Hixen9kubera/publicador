@@ -154,14 +154,21 @@ def get_sale_terms_cached(category_id: str, token: str) -> list:
     return _sale_terms_cache[category_id]
 
 
-def build_sale_terms(category_id: str, token: str) -> list:
+def warranty_days_for_sku(sku: str) -> int:
+    """Política Kubera: 15 días para ropa/calzado (ROP-*, CALZ-*), 30 días el resto."""
+    s = (sku or '').upper()
+    return 15 if (s.startswith('ROP-') or s.startswith('CALZ-')) else 30
+
+
+def build_sale_terms(category_id: str, token: str, sku: str = '') -> list:
     """
     Construye la lista de sale_terms usando value_id del API de ML.
+    Política de garantía: 15 días para ROP-/CALZ-, 30 días para el resto.
     Fallback a IDs conocidos si el API no responde.
     """
-    # Fallbacks conocidos para MLM (México)
     WARRANTY_TYPE_SELLER = '6150835'   # "Garantía del vendedor"
-    WARRANTY_TIME_30D    = '180 días'  # value_name para WARRANTY_TIME (acepta texto libre)
+    days = warranty_days_for_sku(sku)
+    warranty_time_value = f'{days} días'
 
     terms = get_sale_terms_cached(category_id, token)
     sale_terms = []
@@ -169,36 +176,34 @@ def build_sale_terms(category_id: str, token: str) -> list:
     # WARRANTY_TYPE — requiere value_id obligatorio
     wt = next((t for t in terms if t.get('id') == 'WARRANTY_TYPE'), None)
     if wt:
-        # Buscar el value_id de "Garantía del vendedor"
         seller_val = None
         for v in wt.get('values', []):
             vname = (v.get('name') or '').lower()
             if 'vendedor' in vname or 'seller' in vname:
                 seller_val = v.get('id')
                 break
-        # Si no encontramos "vendedor", usar el primer valor disponible
         if not seller_val and wt.get('values'):
             seller_val = wt['values'][0].get('id')
         sale_terms.append({'id': 'WARRANTY_TYPE', 'value_id': seller_val or WARRANTY_TYPE_SELLER})
     else:
         sale_terms.append({'id': 'WARRANTY_TYPE', 'value_id': WARRANTY_TYPE_SELLER})
 
-    # WARRANTY_TIME — puede ser value_name (texto libre) o value_id según la categoría
+    # WARRANTY_TIME — preferir value_id si la categoría tiene un value que coincida
+    # con los días objetivo; si no, mandar value_name como texto libre.
     wtime = next((t for t in terms if t.get('id') == 'WARRANTY_TIME'), None)
     if wtime and wtime.get('values'):
-        # Buscar "30 días" o similar en los valores permitidos
         time_val = None
         for v in wtime.get('values', []):
             vname = (v.get('name') or '').lower()
-            if '30' in vname or '180' in vname:
+            if str(days) in vname and ('día' in vname or 'dia' in vname):
                 time_val = v.get('id')
                 break
         if time_val:
             sale_terms.append({'id': 'WARRANTY_TIME', 'value_id': time_val})
         else:
-            sale_terms.append({'id': 'WARRANTY_TIME', 'value_name': WARRANTY_TIME_30D})
+            sale_terms.append({'id': 'WARRANTY_TIME', 'value_name': warranty_time_value})
     else:
-        sale_terms.append({'id': 'WARRANTY_TIME', 'value_name': WARRANTY_TIME_30D})
+        sale_terms.append({'id': 'WARRANTY_TIME', 'value_name': warranty_time_value})
 
     return sale_terms
 
@@ -519,7 +524,7 @@ def build_payload(prod: dict, token: str, dry_run: bool = False) -> dict | None:
         'status':             'paused',
         'pictures':           picture_ids,
         'attributes':         attributes,
-        'sale_terms': build_sale_terms(category_id, token),
+        'sale_terms': build_sale_terms(category_id, token, prod.get('sku', '')),
         'shipping': {
             'mode':           'me2',
             'local_pick_up':  False,

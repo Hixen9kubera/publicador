@@ -43,6 +43,21 @@ Copia `.env.example` a `.env` y configura las variables de entorno necesarias (W
 
 ## Changelog
 
+### 2026-05-07 - Política de garantía: 30 días default, 15 días para ROP-/CALZ-
+
+**Bug encontrado:** la constante `WARRANTY_TIME_30D` en `build_sale_terms()` tenía valor `'180 días'` (a pesar del nombre), por lo que todas las publicaciones nuevas salían con 180 días de garantía en vez de los 30 días de política Kubera.
+
+**Cambios en publisher.py:**
+
+- Nueva función `warranty_days_for_sku(sku)` con la política: `15 días` si SKU empieza con `ROP-` o `CALZ-`, `30 días` para el resto.
+- `build_sale_terms()` ahora recibe `sku` y construye el `WARRANTY_TIME` dinámicamente con los días correctos.
+- En `WARRANTY_TIME` con `value_id` de catálogo: solo matchea si el `value_name` contiene los días objetivo Y la palabra "día"/"dia" (antes matcheaba con substring "30" lo que también captaba "180 días").
+
+**Mantenimiento de items existentes:** se aplicó update masivo a las 2 cuentas (BEKURA + SANCORFASHION) para corregir warranty:
+- 195 items en BEKURA actualizados a la política nueva
+- 313 items en SANCORFASHION actualizados
+- Estado final: 100% de items active+paused con warranty correcto (`30 días` para no-ROP/CALZ, `15 días` para ROP-/CALZ-).
+
 ### 2026-04-28 - NEEDS_MANUAL no consume cupo del --limit (parche temporal grids)
 
 **Problema:** Mientras se resuelve la creación de guías de tallas vía API (ML expone `POST /catalog/charts` pero requiere `main_attribute` específico por dominio que la API de discovery no expone), los 10 SKUs de ropa/calzado marcados con `NEEDS_MANUAL_CONFIG: GRID_REQUERIDO` quedan en la BD esperando que el seller cree la guía manualmente en el dashboard ML. Hasta entonces, esos SKUs **consumían cupo del `--limit 8`**: si los primeros 8 productos del pool eran todos NEEDS_MANUAL, la corrida no procesaba ningún producto nuevo.
