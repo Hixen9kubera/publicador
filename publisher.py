@@ -382,7 +382,7 @@ def build_payload(prod: dict, token: str, dry_run: bool = False) -> dict | None:
     Reglas obligatorias:
     - SIN description (se sube en paso separado)
     - SIN pictures (se suben en paso separado)
-    - listing_type_id: gold_special
+    - listing_type_id: gold_pro (Premium)
     - shipping.mode: me2
     - free_shipping: True si precio > $149 MXN
     - BRAND: siempre Ferrahome

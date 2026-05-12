@@ -43,6 +43,16 @@ Copia `.env.example` a `.env` y configura las variables de entorno necesarias (W
 
 ## Changelog
 
+### 2026-05-12 - Default listing_type = gold_pro (Premium)
+
+**Bug encontrado:** `DEFAULT_LISTING_TYPE = "gold_special"` en `config.py` hacía que cada publicación nueva saliera como **Clásica**, obligando a correr un upgrade masivo a Premium cada cierto tiempo. La política Kubera es publicar siempre en Premium.
+
+**Cambios:**
+- `config.py`: `DEFAULT_LISTING_TYPE = "gold_pro"` (antes `"gold_special"`).
+- `publisher.py`: docstring actualizado.
+
+**Mantenimiento aplicado:** se subieron a Premium 503 items que estaban en Clásica (254 BEKURA + 249 SANCORFASHION). Estado final: 1,911 items active+paused en ambas cuentas → **100% Premium, 100% warranty correcta (30 días / 15 días para ROP-/CALZ-)**.
+
 ### 2026-05-07 - Política de garantía: 30 días default, 15 días para ROP-/CALZ-
 
 **Bug encontrado:** la constante `WARRANTY_TIME_30D` en `build_sale_terms()` tenía valor `'180 días'` (a pesar del nombre), por lo que todas las publicaciones nuevas salían con 180 días de garantía en vez de los 30 días de política Kubera.
