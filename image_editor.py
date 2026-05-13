@@ -300,8 +300,14 @@ def process_image(src_url: str, flags: dict) -> tuple[Optional[bytes], dict]:
         return None, info
 
     # 1. Descargar imagen original
+    # User-Agent de navegador real para evitar 403 de Cloudflare/hotlink protection en WC.
     try:
-        r = requests.get(src_url, timeout=30)
+        r = requests.get(src_url, timeout=30, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                          '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://chunche.shop/',
+            'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+        })
         r.raise_for_status()
         img_bytes = r.content
     except Exception as e:

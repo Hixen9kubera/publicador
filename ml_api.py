@@ -240,7 +240,13 @@ def preupload_picture(image_url: str, token: str) -> str | None:
     Retorna el picture_id de ML, o None si falla.
     """
     try:
-        img_resp = requests.get(image_url, timeout=30)
+        # User-Agent de navegador real para evitar 403 de Cloudflare/hotlink en WC.
+        img_resp = requests.get(image_url, timeout=30, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                          '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://chunche.shop/',
+            'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+        })
         if img_resp.status_code != 200:
             return None
         image_data = _ensure_min_size(img_resp.content)

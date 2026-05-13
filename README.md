@@ -43,6 +43,18 @@ Copia `.env.example` a `.env` y configura las variables de entorno necesarias (W
 
 ## Changelog
 
+### 2026-05-13 - Fix HTTP 403 al descargar imágenes WC (Cloudflare bloqueaba User-Agent default)
+
+**Problema:** Las descargas de imágenes desde `chunche.shop/wp-content/uploads/...` empezaron a devolver `HTTP 403 Forbidden` (Cloudflare / hotlink-protection bloquea el User-Agent default de `python-requests`). Esto rompía el preprocesamiento Gemini y la pre-subida a ML, produciendo el error `GEMINI_ERROR: N imagen(es) fallaron — download_error: 403 Client Error: Forbidden`. Afectó 12 SKUs en la última corrida (6 × 2 cuentas: TEC-1305, TEC-1504-CRI, JUGU-0194-MUL, MASC-0068-CAF, MUE-0278-NEG-HC28, ORG-0451-UNI-120*80).
+
+**Fix aplicado:**
+- **image_editor.py**: descarga de imágenes ahora envía `User-Agent` de Chrome moderno + `Referer: https://chunche.shop/` + `Accept: image/*`.
+- **ml_api.py — `preupload_picture()`**: mismo cambio para la descarga previa a la pre-subida en ML.
+
+**Verificación:** sin UA → HTTP 403; con UA → HTTP 200 (o 404 si la URL no existe, pero ya pasa el firewall).
+
+**Cleanup:** se borraron los 12 registros con `GEMINI_ERROR` de `ml_progress` para que el cron los reintente en la próxima corrida con el fix aplicado.
+
 ### 2026-05-12 - Default listing_type = gold_pro (Premium)
 
 **Bug encontrado:** `DEFAULT_LISTING_TYPE = "gold_special"` en `config.py` hacía que cada publicación nueva saliera como **Clásica**, obligando a correr un upgrade masivo a Premium cada cierto tiempo. La política Kubera es publicar siempre en Premium.
