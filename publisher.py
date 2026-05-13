@@ -1187,7 +1187,22 @@ def main():
                 errs = prod['_preprocess'].get('errors') or []
                 first_err = (errs[0]['error'] if errs else 'unknown')[:120]
                 n_err = len(errs)
-                error_label = f"GEMINI_ERROR: {n_err} imagen(es) fallaron — {first_err}"
+                # Detectar refusals de política IA de Gemini (no son bugs recuperables —
+                # Gemini se niega a procesar la imagen). Marcar como NEEDS_MANUAL_CONFIG
+                # para que el cron no los reintente cada hora.
+                _all_errs_text = ' | '.join((e.get('error') or '') for e in errs)
+                _ai_policy_markers = (
+                    'IMAGE_RECITATION', 'IMAGE_SAFETY', 'PROHIBITED_CONTENT',
+                    'BLOCKLIST', 'SPII', 'RECITATION', 'SAFETY',
+                )
+                _is_ai_policy = any(m in _all_errs_text for m in _ai_policy_markers)
+                if _is_ai_policy:
+                    error_label = (
+                        f"NEEDS_MANUAL_CONFIG: AI_POLICY (Gemini rechazo {n_err} imagen(es) "
+                        f"por politica — revisar imagenes en WC o publicar sin flags IA) — {first_err}"
+                    )
+                else:
+                    error_label = f"GEMINI_ERROR: {n_err} imagen(es) fallaron — {first_err}"
                 print(f"  [✗] {sku} — PUBLICACIÓN BLOQUEADA: {error_label}")
                 for e in errs:
                     print(f"    - wc_img={e.get('wc_image_id')} flags={e.get('flags')} "

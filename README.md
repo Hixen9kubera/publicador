@@ -43,6 +43,17 @@ Copia `.env.example` a `.env` y configura las variables de entorno necesarias (W
 
 ## Changelog
 
+### 2026-05-13 - NEEDS_MANUAL_CONFIG: AI_POLICY cuando Gemini rechaza por política
+
+**Problema:** Gemini ocasionalmente rechaza procesar imágenes de un SKU con `finish_reason = IMAGE_RECITATION` (su detector de copyright/plagio se dispara) o `IMAGE_SAFETY`, `PROHIBITED_CONTENT`, etc. Antes esto producía `GEMINI_ERROR` que era considerado transitorio y el cron lo reintentaba cada hora. Para refusals persistentes, esto contamina el backlog.
+
+**Fix en publisher.py:**
+
+- En el gate de preprocess errors, si CUALQUIER error contiene marcadores de política IA (`IMAGE_RECITATION`, `IMAGE_SAFETY`, `PROHIBITED_CONTENT`, `BLOCKLIST`, `SPII`, `RECITATION`, `SAFETY`), el `error_label` se construye con prefijo `NEEDS_MANUAL_CONFIG: AI_POLICY (...)` en lugar de `GEMINI_ERROR`.
+- Resultado: el cron deja de reintentarlo cada hora. El seller revisa esos SKUs y los corrige en WC (cambia imagen problemática o desactiva los flags IA del producto).
+
+**Nota:** los refusals transitorios (donde Gemini rechaza una corrida y acepta la siguiente) siguen siendo retry-friendly porque la primera vez que pasen ya no estarán en BD (la corrida exitosa los marca como success=1).
+
 ### 2026-05-13 - Fix HTTP 403 al descargar imágenes WC (Cloudflare bloqueaba User-Agent default)
 
 **Problema:** Las descargas de imágenes desde `chunche.shop/wp-content/uploads/...` empezaron a devolver `HTTP 403 Forbidden` (Cloudflare / hotlink-protection bloquea el User-Agent default de `python-requests`). Esto rompía el preprocesamiento Gemini y la pre-subida a ML, produciendo el error `GEMINI_ERROR: N imagen(es) fallaron — download_error: 403 Client Error: Forbidden`. Afectó 12 SKUs en la última corrida (6 × 2 cuentas: TEC-1305, TEC-1504-CRI, JUGU-0194-MUL, MASC-0068-CAF, MUE-0278-NEG-HC28, ORG-0451-UNI-120*80).
