@@ -474,11 +474,16 @@ def build_payload(prod: dict, token: str, dry_run: bool = False) -> dict | None:
         if not _dims_ok:
             print(f"  [!] Dims paquete omitidas (densidad {_density:.2f} g/cm³ fuera de rango): {_l}x{_wi}x{_h} cm / {_w} kg")
     # ML requiere las 4 dimensiones de paquete juntas o ninguna
+    # Mínimo 1 cm / 1 g por dimensión (ML rechaza '0 cm'/'0 g' como 'wrong format')
     if _dims_ok and _w > 0:
-        attributes.append({'id': 'SELLER_PACKAGE_WEIGHT', 'value_name': f"{int(round(_w * 1000))} g"})
-        attributes.append({'id': 'SELLER_PACKAGE_LENGTH', 'value_name': f"{int(round(_l))} cm"})
-        attributes.append({'id': 'SELLER_PACKAGE_WIDTH',  'value_name': f"{int(round(_wi))} cm"})
-        attributes.append({'id': 'SELLER_PACKAGE_HEIGHT', 'value_name': f"{int(round(_h))} cm"})
+        _w_g = max(1, int(round(_w * 1000)))
+        _l_i = max(1, int(round(_l)))
+        _wi_i = max(1, int(round(_wi)))
+        _h_i = max(1, int(round(_h)))
+        attributes.append({'id': 'SELLER_PACKAGE_WEIGHT', 'value_name': f"{_w_g} g"})
+        attributes.append({'id': 'SELLER_PACKAGE_LENGTH', 'value_name': f"{_l_i} cm"})
+        attributes.append({'id': 'SELLER_PACKAGE_WIDTH',  'value_name': f"{_wi_i} cm"})
+        attributes.append({'id': 'SELLER_PACKAGE_HEIGHT', 'value_name': f"{_h_i} cm"})
 
     # DEPTH: requerido en algunas categorías — usar prod['length'] como fallback si no se mapeó
     if 'DEPTH' not in _attr_ids() and _l > 0:
@@ -725,14 +730,22 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
             payload['attributes'] = [a for a in payload['attributes'] if a.get('id') not in _bad_picture_attrs]
             response, status_code = ml_api.create_item(payload, token)
 
-    # Retry: dimensiones de paquete inválidas → quitar todas y reintentar
+    # Retry: dimensiones de paquete inválidas (formato/valor) → reemplazar con defaults y reintentar.
+    # Matchea tanto 'invalid.seller.package.dimensions' (valor fuera de rango) como
+    # 'invalid.format.seller.package.dimensions' (formato incorrecto: '0 cm', decimales, etc.).
     if status_code == 400 and any(
-        'invalid.seller.package.dimensions' in c.get('code', '')
+        'invalid.seller.package.dimensions' in c.get('code', '') or
+        'invalid.format.seller.package.dimensions' in c.get('code', '')
         for c in response.get('cause', [])
     ):
         _pkg_ids = {'SELLER_PACKAGE_WEIGHT', 'SELLER_PACKAGE_LENGTH', 'SELLER_PACKAGE_WIDTH', 'SELLER_PACKAGE_HEIGHT'}
-        print(f"  [!] Dims paquete rechazadas por ML — reintentando sin dimensiones de paquete...")
         payload['attributes'] = [a for a in payload['attributes'] if a.get('id') not in _pkg_ids]
+        # Valores por defecto conservadores (1kg, 30x20x15 cm) en lugar de omitir las dims
+        payload['attributes'].append({'id': 'SELLER_PACKAGE_WEIGHT', 'value_name': '1000 g'})
+        payload['attributes'].append({'id': 'SELLER_PACKAGE_LENGTH', 'value_name': '30 cm'})
+        payload['attributes'].append({'id': 'SELLER_PACKAGE_WIDTH',  'value_name': '20 cm'})
+        payload['attributes'].append({'id': 'SELLER_PACKAGE_HEIGHT', 'value_name': '15 cm'})
+        print(f"  [!] Dims paquete con formato/valor invalido — reintentando con defaults (1kg, 30x20x15cm)...")
         response, status_code = ml_api.create_item(payload, token)
 
     # Retry: dimensiones de paquete FALTANTES (requeridas por la categoría pero no enviadas)
