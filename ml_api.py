@@ -197,26 +197,19 @@ def search_gtin_upc(brand: str, query: str) -> str | None:
 
 def _ensure_min_size(image_bytes: bytes, min_long: int = 500, min_short: int = 250) -> bytes:
     """
-    Si la imagen es menor que min_long×min_short, la escala proporcionalmente
-    para que cumpla el mínimo de ML. Retorna bytes JPEG.
+    Garantiza que la imagen cumpla el mínimo de ML (long >= 500, short >= 250).
+    Estrategia:
+      1. Si ya cumple → devolver tal cual (convertido a JPEG si es webp/png).
+      2. Si lado largo < min_long: escalar proporcionalmente.
+      3. Si después de escalar el lado corto sigue < min_short:
+         hacer PAD con fondo blanco para llegar al mínimo (no deforma).
+    Siempre devuelve JPEG RGB válido.
     """
     from PIL import Image
     import io
     try:
         img = Image.open(io.BytesIO(image_bytes))
-        w, h = img.size
-        long_side = max(w, h)
-        short_side = min(w, h)
-        if long_side >= min_long and short_side >= min_short:
-            return image_bytes  # ya cumple
-
-        # Calcular factor de escala necesario
-        scale = max(min_long / long_side, min_short / short_side)
-        new_w = int(w * scale) + 1
-        new_h = int(h * scale) + 1
-        img = img.resize((new_w, new_h), Image.LANCZOS)
-
-        # Convertir a RGB si es RGBA/P (JPEG no soporta alfa)
+        # Convertir a RGB primero (JPEG no acepta RGBA/P/LA)
         if img.mode in ('RGBA', 'P', 'LA'):
             bg = Image.new('RGB', img.size, (255, 255, 255))
             bg.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
@@ -224,12 +217,34 @@ def _ensure_min_size(image_bytes: bytes, min_long: int = 500, min_short: int = 2
         elif img.mode != 'RGB':
             img = img.convert('RGB')
 
+        w, h = img.size
+        long_side = max(w, h)
+        short_side = min(w, h)
+
+        # Escalar si lado largo < min_long
+        if long_side < min_long:
+            scale = min_long / long_side
+            new_w = max(int(w * scale) + 1, 1)
+            new_h = max(int(h * scale) + 1, 1)
+            img = img.resize((new_w, new_h), Image.LANCZOS)
+            print(f"    [img] Escalada de {w}x{h} -> {new_w}x{new_h}")
+            w, h = new_w, new_h
+            short_side = min(w, h)
+
+        # Pad si el lado corto sigue < min_short
+        if short_side < min_short:
+            tgt_w = max(w, min_short)
+            tgt_h = max(h, min_short)
+            canvas = Image.new('RGB', (tgt_w, tgt_h), (255, 255, 255))
+            canvas.paste(img, ((tgt_w - w) // 2, (tgt_h - h) // 2))
+            img = canvas
+            print(f"    [img] Padding a {tgt_w}x{tgt_h} (lado corto < {min_short})")
+
         buf = io.BytesIO()
         img.save(buf, format='JPEG', quality=90)
-        print(f"    [img] Escalada de {w}x{h} → {new_w}x{new_h}")
         return buf.getvalue()
     except Exception as e:
-        print(f"    [img] No se pudo escalar: {e}")
+        print(f"    [img] No se pudo procesar: {e}")
         return image_bytes
 
 

@@ -43,6 +43,20 @@ Copia `.env.example` a `.env` y configura las variables de entorno necesarias (W
 
 ## Changelog
 
+### 2026-05-20 - Fix IMAGES_TOO_SMALL con padding automático
+
+**Problema:** Productos como `ROP-0197`, `ACC-0255`, `ACC-0381-MUL-4.5MTS`, `VAR-0423-FLO-ROS`, `TEC-1230-NEG-NISSAN` tenían imágenes con lado largo entre 410-470 px (debajo del mínimo 500 que exige ML). El `_ensure_min_size()` original solo escalaba proporcionalmente — pero si la imagen es cuadrada (ej. 451x467) escalar a 500x518 cumple, OK; pero si el aspecto es muy alargado, el lado corto podría quedar < 250 y ML seguiría rechazando.
+
+**Cambios en ml_api.py `_ensure_min_size()`:**
+
+1. **Convertir a RGB primero** (no al final) — evita problemas con webp/RGBA/P.
+2. **Escalado proporcional** si lado largo < 500.
+3. **Padding con fondo blanco** si tras el escalado el lado corto sigue < 250 → garantiza siempre output >= 500x250 sin deformar la imagen.
+
+Resultado: cualquier imagen WC (incluso muy pequeña o con aspect ratio extremo) ahora se procesa a un JPEG válido para ML.
+
+**Cleanup:** se borraron las 6 filas con `IMAGES_TOO_SMALL` de `ml_progress` para que el cron las republique con el código nuevo.
+
 ### 2026-05-20 - Fix dimensiones de paquete con `0 cm` (HTTP 400 invalid.format)
 
 **Problema:** ML rechazaba publicaciones con error `item.attribute.invalid.format.seller.package.dimensions: Only integers are accepted...` cuando alguna dimensión del producto en WC era menor a 0.5 cm (ej: altura 0.4 cm). El publisher hacía `int(round(_h))` que daba `0` y enviaba `SELLER_PACKAGE_HEIGHT = '0 cm'` — ML lo rechaza como formato inválido. Afectó 6 SKUs en la última corrida (ACC-0441-PLA-21PZ, JUGU-0204-MUL-11PZ, TEC-1519-TRANS-200PZ × 2 cuentas) generando 84 entries de backlog en 24h.
