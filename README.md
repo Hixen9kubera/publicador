@@ -43,6 +43,17 @@ Copia `.env.example` a `.env` y configura las variables de entorno necesarias (W
 
 ## Changelog
 
+### 2026-05-22 - Retry + backoff en descarga de imágenes (HTTP 429 Too Many Requests)
+
+**Problema:** Cuando el cron procesaba tandas grandes (10+ SKUs/hora con varias imágenes c/u), WooCommerce empezaba a devolver `HTTP 429 Too Many Requests` y el publisher fallaba el preprocesamiento. Generó 20 errores nuevos en últimas 6h (TEC-1362-NEG, TEC-1363-MET en ambas cuentas).
+
+**Cambios:**
+
+- **image_editor.py — descarga de imagen original**: ahora con loop de hasta 5 intentos. Si recibe `429`, lee el header `Retry-After` (si existe) o calcula backoff de 3+attempt*3 segundos (cap 30s). También retry para 5xx (server errors) con backoff 2+attempt*2. Para 403/404 no insiste.
+- **ml_api.py — `preupload_picture()`**: misma lógica de retry + backoff para 429 y 5xx.
+
+**Cleanup:** se borraron las 4 filas con `429 Too Many` de `ml_progress` para que el cron las republique con el código nuevo.
+
 ### 2026-05-20 - Fix IMAGES_TOO_SMALL con padding automático
 
 **Problema:** Productos como `ROP-0197`, `ACC-0255`, `ACC-0381-MUL-4.5MTS`, `VAR-0423-FLO-ROS`, `TEC-1230-NEG-NISSAN` tenían imágenes con lado largo entre 410-470 px (debajo del mínimo 500 que exige ML). El `_ensure_min_size()` original solo escalaba proporcionalmente — pero si la imagen es cuadrada (ej. 451x467) escalar a 500x518 cumple, OK; pero si el aspecto es muy alargado, el lado corto podría quedar < 250 y ML seguiría rechazando.

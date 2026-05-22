@@ -299,20 +299,42 @@ def process_image(src_url: str, flags: dict) -> tuple[Optional[bytes], dict]:
     if not (qf or tt or cm):
         return None, info
 
-    # 1. Descargar imagen original
-    # User-Agent de navegador real para evitar 403 de Cloudflare/hotlink protection en WC.
-    try:
-        r = requests.get(src_url, timeout=30, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                          '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': 'https://chunche.shop/',
-            'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-        })
-        r.raise_for_status()
-        img_bytes = r.content
-    except Exception as e:
+    # 1. Descargar imagen original con retry + backoff.
+    # User-Agent de navegador real para evitar 403 de Cloudflare/hotlink en WC.
+    # WC puede devolver 429 (Too Many Requests) bajo carga — respetar Retry-After.
+    img_bytes = None
+    last_err = None
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                      '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://chunche.shop/',
+        'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+    }
+    import time as _time
+    for attempt in range(5):
+        try:
+            r = requests.get(src_url, timeout=30, headers=headers)
+            if r.status_code == 429:
+                retry_after = r.headers.get('Retry-After')
+                wait = int(retry_after) if (retry_after or '').isdigit() else (3 + attempt * 3)
+                _time.sleep(min(wait, 30))
+                last_err = f'429 (intento {attempt+1}/5, esperando {wait}s)'
+                continue
+            r.raise_for_status()
+            img_bytes = r.content
+            break
+        except requests.exceptions.HTTPError as e:
+            last_err = str(e)
+            if r.status_code in (500, 502, 503, 504):
+                _time.sleep(2 + attempt * 2)
+                continue
+            break
+        except Exception as e:
+            last_err = str(e)
+            _time.sleep(1.5 * (attempt + 1))
+    if img_bytes is None:
         info['action'] = 'error'
-        info['gemini_error'] = f'download_error: {e}'
+        info['gemini_error'] = f'download_error: {last_err}'
         return None, info
     info['bytes_in'] = len(img_bytes)
 
