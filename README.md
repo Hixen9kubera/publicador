@@ -43,6 +43,18 @@ Copia `.env.example` a `.env` y configura las variables de entorno necesarias (W
 
 ## Changelog
 
+### 2026-05-22 - Retry corto + log de status en preupload (cron lento)
+
+**Problema:** El fix del 429 anterior (5 intentos × hasta 30s c/u = 150s por imagen) hacía el cron MUY lento. Un SKU con 6 imágenes podía consumir 10+ minutos solo en retries inútiles — el cron de BEKURA bajó a 1-2 publicaciones/hora porque la corrida no alcanzaba a procesar los 8 SKUs en la hora antes del siguiente disparo. Pero **ML acepta perfectamente el fallback URL** (`{source: url}`), así que esperar tanto en pre-upload no genera valor.
+
+**Cambios:**
+
+- **ml_api.preupload_picture()**: retry reducido a **3 intentos** con backoff corto (2s/4s, cap 10s en 429). Si falla, log explícito con status code y cae rápido a URL fallback.
+- **image_editor.py — descarga**: mismo retry corto (3 intentos, cap 10s).
+- **Log explícito** del status code que falló (`[preupload] fallo descarga (status=429)`) para diagnosticar futuros problemas.
+
+Resultado esperado: si WC está saturado, en lugar de demorar 12 min por SKU, demora ~30s y cae a URL fallback (ML lo descarga directo del WC en su infra).
+
 ### 2026-05-22 - Retry + backoff en descarga de imágenes (HTTP 429 Too Many Requests)
 
 **Problema:** Cuando el cron procesaba tandas grandes (10+ SKUs/hora con varias imágenes c/u), WooCommerce empezaba a devolver `HTTP 429 Too Many Requests` y el publisher fallaba el preprocesamiento. Generó 20 errores nuevos en últimas 6h (TEC-1362-NEG, TEC-1363-MET en ambas cuentas).

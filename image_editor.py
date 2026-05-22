@@ -311,14 +311,14 @@ def process_image(src_url: str, flags: dict) -> tuple[Optional[bytes], dict]:
         'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
     }
     import time as _time
-    for attempt in range(5):
+    for attempt in range(3):
         try:
-            r = requests.get(src_url, timeout=30, headers=headers)
+            r = requests.get(src_url, timeout=20, headers=headers)
             if r.status_code == 429:
                 retry_after = r.headers.get('Retry-After')
-                wait = int(retry_after) if (retry_after or '').isdigit() else (3 + attempt * 3)
-                _time.sleep(min(wait, 30))
-                last_err = f'429 (intento {attempt+1}/5, esperando {wait}s)'
+                wait = int(retry_after) if (retry_after or '').isdigit() else (2 + attempt * 2)
+                _time.sleep(min(wait, 10))
+                last_err = f'429 (intento {attempt+1}/3)'
                 continue
             r.raise_for_status()
             img_bytes = r.content
@@ -326,12 +326,12 @@ def process_image(src_url: str, flags: dict) -> tuple[Optional[bytes], dict]:
         except requests.exceptions.HTTPError as e:
             last_err = str(e)
             if r.status_code in (500, 502, 503, 504):
-                _time.sleep(2 + attempt * 2)
+                _time.sleep(1 + attempt)
                 continue
             break
         except Exception as e:
             last_err = str(e)
-            _time.sleep(1.5 * (attempt + 1))
+            _time.sleep(1 + attempt)
     if img_bytes is None:
         info['action'] = 'error'
         info['gemini_error'] = f'download_error: {last_err}'

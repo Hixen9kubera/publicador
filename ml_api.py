@@ -252,38 +252,44 @@ def preupload_picture(image_url: str, token: str) -> str | None:
     """
     Pre-sube una imagen a ML descargandola de la URL y subiendola directamente.
     Si la imagen es menor a 500px, la escala antes de subir.
-    Retorna el picture_id de ML, o None si falla.
+    Retorna el picture_id de ML, o None si falla (ML acepta URL fallback igual).
+
+    Retry corto: 3 intentos con backoff 2s/4s. Si WC sigue saturado caemos rápido
+    al fallback URL y dejamos que ML descargue directamente — más rápido que esperar
+    150s en retries inútiles que terminan en el mismo fallback.
     """
+    import time as _time
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                      '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://chunche.shop/',
+        'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+    }
+    img_resp = None
+    last_status = None
+    for attempt in range(3):
+        try:
+            img_resp = requests.get(image_url, timeout=20, headers=headers)
+            last_status = img_resp.status_code
+        except Exception as e:
+            last_status = f'exc:{type(e).__name__}'
+            _time.sleep(1 + attempt)
+            continue
+        if img_resp.status_code == 200:
+            break
+        if img_resp.status_code == 429:
+            retry_after = img_resp.headers.get('Retry-After')
+            wait = int(retry_after) if (retry_after or '').isdigit() else (2 + attempt * 2)
+            _time.sleep(min(wait, 10))  # cap 10s — no esperar más, mejor fallback URL
+            continue
+        if img_resp.status_code in (500, 502, 503, 504):
+            _time.sleep(1 + attempt)
+            continue
+        break  # 403, 404, etc.: no insistir
+    if img_resp is None or img_resp.status_code != 200:
+        print(f"    [preupload] fallo descarga (status={last_status}) — caera a URL fallback")
+        return None
     try:
-        # User-Agent de navegador real para evitar 403 de Cloudflare/hotlink en WC.
-        # Retry con backoff cuando WC devuelve 429 (Too Many Requests) o 5xx.
-        import time as _time
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                          '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': 'https://chunche.shop/',
-            'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-        }
-        img_resp = None
-        for attempt in range(5):
-            try:
-                img_resp = requests.get(image_url, timeout=30, headers=headers)
-            except Exception:
-                _time.sleep(1.5 * (attempt + 1))
-                continue
-            if img_resp.status_code == 200:
-                break
-            if img_resp.status_code == 429:
-                retry_after = img_resp.headers.get('Retry-After')
-                wait = int(retry_after) if (retry_after or '').isdigit() else (3 + attempt * 3)
-                _time.sleep(min(wait, 30))
-                continue
-            if img_resp.status_code in (500, 502, 503, 504):
-                _time.sleep(2 + attempt * 2)
-                continue
-            break  # 403, 404, etc.: no insistir
-        if img_resp is None or img_resp.status_code != 200:
-            return None
         image_data = _ensure_min_size(img_resp.content)
         resp = requests.post(
             f"{ML_API_BASE}/pictures",
@@ -293,8 +299,10 @@ def preupload_picture(image_url: str, token: str) -> str | None:
         )
         if resp.status_code == 201:
             return resp.json().get('id')
+        print(f"    [preupload] ML rechazo upload: HTTP {resp.status_code} {resp.text[:120]}")
         return None
-    except Exception:
+    except Exception as e:
+        print(f"    [preupload] excepcion en upload: {e}")
         return None
 
 
