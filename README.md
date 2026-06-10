@@ -43,6 +43,26 @@ Copia `.env.example` a `.env` y configura las variables de entorno necesarias (W
 
 ## Changelog
 
+### 2026-05-29 - Guías de tallas: inyectar `SIZE_GRID_ID` por cuenta/dominio/género
+
+**Problema:** Categorías de calzado/ropa con `catalog_domain` (SANDALS_AND_CLOGS, SNEAKERS, BOOTS_AND_BOOTIES, LOAFERS_AND_OXFORDS, etc.) exigen `SIZE_GRID_ID`. El publisher hacía skip de ese atributo, ML lo rechazaba con `missing.fashion_grid.grid_id.values` y los SKUs quedaban en `NEEDS_MANUAL_CONFIG: GRID_REQUERIDO`.
+
+**Solución:**
+
+- Creadas 7 guías de tallas vía `POST /catalog/charts` (5 en BEKURA + 2 nuevas en SANCORFASHION).
+- Nuevo módulo `size_chart_mapping.py` con dict `CHARTS_BY_ACCOUNT[cuenta]["DOMAIN:GENDER"] → chart_id`.
+- `build_payload()` ahora recibe `cuenta` y, si la categoría tiene `catalog_domain` + género detectable en `ml_attrs`, inyecta `SIZE_GRID_ID = <chart_id>` en el payload.
+
+**Cobertura inicial** (cubre 14 de los 18 SKUs de calzado bloqueados):
+- SANDALS_AND_CLOGS Hombre, Mujer (parcial), Niñas (parcial)
+- SNEAKERS Hombre, Mujer
+- BOOTS_AND_BOOTIES Hombre adulto
+- LOAFERS_AND_OXFORDS Hombre
+
+**Lección API**: al crear guías vía POST, ML rechaza si `SIZE` y `MX_SIZE` están duplicados en una fila — basta con enviar MX_SIZE / FOOT_LENGTH / EU_SIZE; ML infiere SIZE automáticamente.
+
+**Cleanup:** se borraron 38 filas con `GRID_REQUERIDO` de CALZ-* para que el cron las republique con SIZE_GRID_ID asignado.
+
 ### 2026-05-22 - Retry corto + log de status en preupload (cron lento)
 
 **Problema:** El fix del 429 anterior (5 intentos × hasta 30s c/u = 150s por imagen) hacía el cron MUY lento. Un SKU con 6 imágenes podía consumir 10+ minutos solo en retries inútiles — el cron de BEKURA bajó a 1-2 publicaciones/hora porque la corrida no alcanzaba a procesar los 8 SKUs en la hora antes del siguiente disparo. Pero **ML acepta perfectamente el fallback URL** (`{source: url}`), así que esperar tanto en pre-upload no genera valor.

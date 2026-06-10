@@ -375,7 +375,7 @@ def preprocess_product_images(prod: dict) -> dict:
 # CONSTRUCCIÓN DEL PAYLOAD ML
 # ══════════════════════════════════════════════════════════════════════════════
 
-def build_payload(prod: dict, token: str, dry_run: bool = False) -> dict | None:
+def build_payload(prod: dict, token: str, dry_run: bool = False, cuenta: str = '') -> dict | None:
     """
     Construye el payload para POST /items de ML.
 
@@ -485,6 +485,30 @@ def build_payload(prod: dict, token: str, dry_run: bool = False) -> dict | None:
         attributes.append({'id': 'SELLER_PACKAGE_WIDTH',  'value_name': f"{_wi_i} cm"})
         attributes.append({'id': 'SELLER_PACKAGE_HEIGHT', 'value_name': f"{_h_i} cm"})
 
+    # SIZE_GRID_ID: si la categoría tiene catalog_domain de calzado/ropa,
+    # buscar chart_id en size_chart_mapping según (cuenta, domain, gender).
+    if cuenta:
+        domain = (cat_info.get('settings', {}) or {}).get('catalog_domain', '') or ''
+        domain = domain.replace('MLM-', '')
+        if domain:
+            # Gender puede venir de ml_attrs o wc_attrs
+            gender = (prod['ml_attrs'].get('gender')
+                      or prod['ml_attrs'].get('GENDER')
+                      or prod.get('wc_attrs', {}).get('gender', ''))
+            # Normalizar a value_name esperado por ML (Hombre, Mujer, Niñas, etc.)
+            if isinstance(gender, list) and gender:
+                gender = gender[0]
+            gender = str(gender).strip().strip("[]'\" ")
+            try:
+                from size_chart_mapping import get_chart_id
+                chart_id = get_chart_id(cuenta, domain, gender)
+            except Exception as _e:
+                chart_id = None
+                print(f"  [size-chart] error cargando mapping: {_e}")
+            if chart_id and 'SIZE_GRID_ID' not in _attr_ids():
+                attributes.append({'id': 'SIZE_GRID_ID', 'value_id': chart_id})
+                print(f"  [size-chart] {domain}/{gender} -> SIZE_GRID_ID={chart_id}")
+
     # DEPTH: requerido en algunas categorías — usar prod['length'] como fallback si no se mapeó
     if 'DEPTH' not in _attr_ids() and _l > 0:
         cat_has_depth = any(a.get('id') == 'DEPTH' for a in ml_category_attrs)
@@ -568,7 +592,7 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
     print(f"  Attrs WC: {prod['ml_attrs']}")
 
     # Construir payload
-    payload = build_payload(prod, token, dry_run=dry_run)
+    payload = build_payload(prod, token, dry_run=dry_run, cuenta=cuenta)
     if payload is None:
         return {'success': False, 'sku': sku, 'error': 'datos_insuficientes'}
 
