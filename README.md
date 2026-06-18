@@ -43,6 +43,27 @@ Copia `.env.example` a `.env` y configura las variables de entorno necesarias (W
 
 ## Changelog
 
+### 2026-06-12 - Categoría WC como fuente de verdad (fix categoría desactualizada)
+
+**Problema:** Cuando una KAM cambia la categoría WC en admin (ej. TEC-1556-ROJ pasó de "Bolsas" a "Kits de Decoración"), el publisher seguía usando el meta `ml_category_id` viejo cacheado en WC, publicando en la categoría incorrecta de ML. El meta solo se actualizaba en el sync inicial ML→WC y nunca se re-sincronizaba al cambio manual de la KAM.
+
+**Solución:** Cada categoría WC tiene su `MLM_id` en el campo `description` con patrón `"ML: MLM###"` (ej. `Kits de Decoración` → `ML: MLM435356`). 915 / 1537 categorías ya tienen este mapeo configurado.
+
+**Cambios:**
+
+- **`wc_category_mapping.py`** (nuevo): descarga todas las categorías WC vía REST al arranque, extrae el ML ID del `description` y construye dict `{wc_cat_id → ml_cat_id}`. Cachea por 1h.
+- **`wc_api.py:parse_product()`**: ahora incluye `wc_categories` (lista de categorías WC visibles) en el dict del producto.
+- **`publisher.py:build_payload()`**: antes de publicar resuelve la categoría así:
+  1. Si la categoría WC del producto tiene mapeo en el dict y **es distinta** del meta `ml_category_id` → la KAM la cambió, usar la nueva (override) + log
+  2. Si coinciden → usar el meta como hasta ahora
+  3. Si la categoría WC no tiene mapeo → fallback al meta
+
+**Resultado**: las KAMs ahora son la fuente de verdad. Cuando cambian la categoría WC, la próxima corrida del cron publica en la nueva categoría ML automáticamente, sin necesitar tocar el meta.
+
+**Cleanup TEC-1556-ROJ:**
+- Cerradas/pausadas las 2 publicaciones en categoría errónea (BEKURA MLM2973541353 closed, SANCORFASHION MLM5438856462 paused — tiene stock Full)
+- Borrado de `ml_progress` para forzar republicación con categoría correcta `MLM435356` (Kits de Decoración)
+
 ### 2026-05-29 - Guías de tallas: inyectar `SIZE_GRID_ID` por cuenta/dominio/género
 
 **Problema:** Categorías de calzado/ropa con `catalog_domain` (SANDALS_AND_CLOGS, SNEAKERS, BOOTS_AND_BOOTIES, LOAFERS_AND_OXFORDS, etc.) exigen `SIZE_GRID_ID`. El publisher hacía skip de ese atributo, ML lo rechazaba con `missing.fashion_grid.grid_id.values` y los SKUs quedaban en `NEEDS_MANUAL_CONFIG: GRID_REQUERIDO`.

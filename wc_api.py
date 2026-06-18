@@ -197,9 +197,13 @@ def parse_product(wc_product: dict) -> dict:
         'width':           dims.get('width', ''),
         'height':          dims.get('height', ''),
         'stock':           wc_product.get('stock_quantity') or 50,
-        # Meta ML
+        # Meta ML (categoria cacheada — puede estar desactualizada vs WC visible)
         'ml_category_id':  meta.get('ml_category_id', ''),
         'ml_category_name':meta.get('ml_category_name', ''),
+        # Categorias WC visibles (lo que las KAMs editan en admin)
+        # cada una: {id, name, slug} — usado para detectar cambios manuales
+        'wc_categories':   [{'id': c.get('id'), 'name': c.get('name'), 'slug': c.get('slug')}
+                            for c in wc_product.get('categories', [])],
         # Atributos ML (prefijo ml_attr_*)
         'ml_attrs':        {k[len('ml_attr_'):]: v
                             for k, v in meta.items()

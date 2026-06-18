@@ -390,7 +390,24 @@ def build_payload(prod: dict, token: str, dry_run: bool = False, cuenta: str = '
     - SELLER_SKU: SKU del producto
     - sale_terms: garantía del vendedor 30 días
     """
-    category_id = prod['ml_category_id']
+    # Resolver categoria ML usando la categoria WC como fuente de verdad.
+    # Si la KAM cambio la categoria en admin de WC (campo `categories`), la WC
+    # tiene precedencia sobre el meta `ml_category_id` que puede estar cacheado/viejo.
+    # Cada categoria WC tiene su ml_id en el campo `description` con patron "ML: MLM###".
+    cached_ml_id = prod.get('ml_category_id', '') or ''
+    try:
+        from wc_category_mapping import resolve_ml_category_from_wc
+        new_ml_id, motivo = resolve_ml_category_from_wc(prod.get('wc_categories', []), cached_ml_id)
+    except Exception as _e:
+        new_ml_id, motivo = (None, f'error:{_e}')
+    if new_ml_id and motivo == 'override':
+        wc_cat_name = (prod.get('wc_categories') or [{}])[0].get('name', '?')
+        print(f"  [cat] WC '{wc_cat_name}' indica {new_ml_id} (override de meta {cached_ml_id!r} = '{prod.get('ml_category_name','')}')")
+        category_id = new_ml_id
+    else:
+        category_id = cached_ml_id
+        if motivo not in ('same',):
+            print(f"  [cat] usando meta ml_category_id={category_id} (wc_resolve={motivo})")
     if not category_id:
         print(f"  [!] Sin ml_category_id — saltando {prod['sku']}")
         return None
