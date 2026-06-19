@@ -43,6 +43,17 @@ Copia `.env.example` a `.env` y configura las variables de entorno necesarias (W
 
 ## Changelog
 
+### 2026-06-13 - Retry para invalid_sale_units (Pack vs UNITS_PER_PACK=1)
+
+**Problema:** ML rechazaba con `item.attribute.invalid_sale_units` cuando un producto tenía `SALE_FORMAT=Pack` (value_id `1359392`) combinado con `UNITS_PER_PACK=1` o `UNITS_PER_PACKAGE=1`. Mensaje: *"Ingresa un valor diferente a 1 porque completaste Pack en el campo Formato de venta"*. Afectó TEC-0504-NEG y otros 10+ en backlog.
+
+**Fix en publisher.py:** nuevo retry — cuando aparece `invalid_sale_units`, quitar los 3 atributos conflictivos (`SALE_FORMAT`, `UNITS_PER_PACK`, `UNITS_PER_PACKAGE`) y reintentar. El producto se vende como unidad simple (sin Pack).
+
+**Cleanup:** se borraron 44 filas de `ml_progress` para forzar reintento:
+- 31 SKUs CALZ-* con GRID_REQUERIDO que ya tienen guía existente
+- 12 SKUs IMAGES_TOO_SMALL (fix de padding ya aplicado)
+- 1 SKU con HTTP 400 sale_units
+
 ### 2026-06-12 - Categoría WC como fuente de verdad (fix categoría desactualizada)
 
 **Problema:** Cuando una KAM cambia la categoría WC en admin (ej. TEC-1556-ROJ pasó de "Bolsas" a "Kits de Decoración"), el publisher seguía usando el meta `ml_category_id` viejo cacheado en WC, publicando en la categoría incorrecta de ML. El meta solo se actualizaba en el sync inicial ML→WC y nunca se re-sincronizaba al cambio manual de la KAM.

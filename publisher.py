@@ -771,6 +771,21 @@ def publish_product(prod: dict, token: str, dry_run: bool = False, cuenta: str =
             payload['attributes'] = [a for a in payload['attributes'] if a.get('id') not in _bad_picture_attrs]
             response, status_code = ml_api.create_item(payload, token)
 
+    # Retry: SALE_FORMAT=Pack conflicts con UNITS_PER_PACK=1
+    # ML: "Ingresa un valor diferente a 1 porque completaste Pack en el campo Formato de venta".
+    # Fix: si tenemos SALE_FORMAT=Pack con UNITS_PER_PACK=1, lo mas seguro es quitar
+    # SALE_FORMAT (revertir a venta por unidad). El producto se vende como unidad simple.
+    if status_code == 400 and any(
+        c.get('code') == 'item.attribute.invalid_sale_units'
+        for c in response.get('cause', [])
+    ):
+        _conflict_ids = {'SALE_FORMAT', 'UNITS_PER_PACK', 'UNITS_PER_PACKAGE'}
+        before = [a['id'] for a in payload['attributes'] if a['id'] in _conflict_ids]
+        if before:
+            print(f"  [!] invalid_sale_units (Pack vs UNITS=1) — quitando {before} para vender como unidad")
+            payload['attributes'] = [a for a in payload['attributes'] if a.get('id') not in _conflict_ids]
+            response, status_code = ml_api.create_item(payload, token)
+
     # Retry: dimensiones de paquete inválidas (formato/valor) → reemplazar con defaults y reintentar.
     # Matchea tanto 'invalid.seller.package.dimensions' (valor fuera de rango) como
     # 'invalid.format.seller.package.dimensions' (formato incorrecto: '0 cm', decimales, etc.).
