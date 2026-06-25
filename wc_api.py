@@ -2,8 +2,10 @@
 wc_api.py — Obtener productos de WooCommerce para publicar en ML
 """
 import re
+import time
 import xmlrpc.client
 import requests
+from requests.exceptions import RequestException
 from config import WC_URL, WC_KEY, WC_SECRET
 
 AUTH = (WC_KEY, WC_SECRET)
@@ -17,12 +19,54 @@ _XMLRPC_URL  = f"{WC_URL}/xmlrpc.php"
 _XMLRPC_USER = "brandon@kubera.mx"
 _XMLRPC_PASS = "KV^!3nD!Ogh88uYHr)h!fo1a"
 
+# Errores HTTP transitorios que justifican reintento
+_RETRY_STATUSES = {429, 500, 502, 503, 504}
+
+
+def _request_with_retry(method: str, url: str, max_retries: int = 4, **kwargs):
+    """
+    Wrapper de requests con reintentos + backoff para errores transitorios.
+
+    Cubre tanto excepciones de conexión (RemoteDisconnected, ConnectionError,
+    timeouts — frecuentes cuando WooCommerce/Cloudflare cierra la conexión a
+    mitad de una tanda grande de GETs por-ID) como respuestas 429/5xx.
+
+    Retorna el objeto Response, o None si se agotaron los reintentos. El llamador
+    debe tolerar None (saltar ese item) en vez de crashear toda la corrida.
+    """
+    kwargs.setdefault('timeout', 30)
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.request(method, url, **kwargs)
+        except RequestException as e:
+            if attempt < max_retries:
+                wait = min(2 ** (attempt - 1), 15)  # 1, 2, 4, 8 → cap 15s
+                print(f"  [wc_api] {type(e).__name__} en {url} "
+                      f"(intento {attempt}/{max_retries}) — reintento en {wait}s")
+                time.sleep(wait)
+                continue
+            print(f"  [wc_api] Falló tras {max_retries} intentos: {type(e).__name__}: {e}")
+            return None
+        # Reintento a nivel de status (429 / 5xx)
+        if resp.status_code in _RETRY_STATUSES and attempt < max_retries:
+            retry_after = resp.headers.get('Retry-After')
+            wait = int(retry_after) if (retry_after or '').isdigit() else min(2 ** (attempt - 1), 15)
+            print(f"  [wc_api] HTTP {resp.status_code} en {url} "
+                  f"(intento {attempt}/{max_retries}) — reintento en {wait}s")
+            time.sleep(wait)
+            continue
+        return resp
+    return None
+
 
 def _get(endpoint: str, params: dict) -> list:
     url = f"{BASE}/{endpoint}"
     print(f"  [wc_api] GET {url}")
     print(f"  [wc_api] Params: {params}")
-    resp = requests.get(url, params=params, auth=AUTH, timeout=30)
+    resp = _request_with_retry('GET', url, params=params, auth=AUTH)
+    if resp is None:
+        print(f"  [wc_api] Error de conexión persistente en {endpoint} — devuelvo []")
+        return []
     print(f"  [wc_api] Status: {resp.status_code}")
     if resp.status_code == 200:
         data = resp.json()
@@ -83,12 +127,17 @@ def get_products(status='pending', tag_id=None, id_min=None, id_max=None,
 
         # 3. Enriquecer con WC REST API — fetch individual por ID
         #    (evita el filtro de status que bloquea custom statuses)
+        #    Cada GET usa retry+backoff: si WC/Cloudflare cierra la conexión
+        #    (RemoteDisconnected) en un ID, se reintenta y, si persiste, se
+        #    SALTA ese producto en vez de tumbar toda la corrida del cron.
         all_products = []
+        errores_conexion = 0
         for wc_id in ids:
-            resp = requests.get(
-                f"{BASE}/products/{wc_id}",
-                auth=AUTH, timeout=30
-            )
+            resp = _request_with_retry('GET', f"{BASE}/products/{wc_id}", auth=AUTH)
+            if resp is None:
+                errores_conexion += 1
+                print(f"  [wc_api] Saltando ID {wc_id} — error de conexión persistente")
+                continue
             if resp.status_code == 200:
                 try:
                     prod = resp.json()
@@ -102,6 +151,8 @@ def get_products(status='pending', tag_id=None, id_min=None, id_max=None,
             else:
                 print(f"  [wc_api] Error {resp.status_code} obteniendo producto ID {wc_id}")
 
+        if errores_conexion:
+            print(f"  [wc_api] {errores_conexion} producto(s) saltados por error de conexión")
         print(f"  [wc_api] Productos enriquecidos: {len(all_products)}")
         return all_products
 
@@ -225,29 +276,24 @@ def update_product_status(wc_id: int, new_status: str = 'publish') -> bool:
     Retorna True si fue exitoso, False si hubo error.
     """
     url = f"{BASE}/products/{wc_id}"
-    try:
-        resp = requests.put(url, json={'status': new_status}, auth=AUTH, timeout=30)
-        if resp.status_code == 200:
-            return True
-        print(f"  [wc_api] Error actualizando status WC {wc_id}: HTTP {resp.status_code} — {resp.text[:200]}")
+    resp = _request_with_retry('PUT', url, json={'status': new_status}, auth=AUTH)
+    if resp is None:
+        print(f"  [wc_api] No se pudo actualizar status WC {wc_id} — error de conexión persistente")
         return False
-    except Exception as e:
-        print(f"  [wc_api] Excepción actualizando status WC {wc_id}: {e}")
-        return False
+    if resp.status_code == 200:
+        return True
+    print(f"  [wc_api] Error actualizando status WC {wc_id}: HTTP {resp.status_code} — {resp.text[:200]}")
+    return False
 
 
 def save_gtin_to_wc(wc_id: int, gtin: str) -> bool:
     """Guarda el GTIN encontrado en el meta _barcode del producto WC."""
-    try:
-        resp = requests.put(
-            f"{BASE}/products/{wc_id}",
-            json={'meta_data': [{'key': '_barcode', 'value': gtin}]},
-            auth=AUTH,
-            timeout=15,
-        )
-        return resp.status_code == 200
-    except Exception:
-        return False
+    resp = _request_with_retry(
+        'PUT', f"{BASE}/products/{wc_id}",
+        json={'meta_data': [{'key': '_barcode', 'value': gtin}]},
+        auth=AUTH, timeout=15,
+    )
+    return resp is not None and resp.status_code == 200
 
 
 def _html_to_plain(html: str) -> str:

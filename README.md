@@ -43,6 +43,18 @@ Copia `.env.example` a `.env` y configura las variables de entorno necesarias (W
 
 ## Changelog
 
+### 2026-06-24 - Retry en WC REST contra `RemoteDisconnected` (cron caía al cargar productos)
+
+**Problema:** El cron en App Platform crasheaba al inicio, en `Cargando productos de WooCommerce...`. Tras obtener los IDs `ready` por XML-RPC (ej. 129 productos), el enriquecimiento via REST hace un `GET /products/{id}` por cada ID; cuando WooCommerce/Cloudflare cerraba la conexión a mitad de la tanda, `requests` lanzaba `http.client.RemoteDisconnected: Remote end closed connection without response`. Ese GET no tenía try/except ni retry, así que una sola desconexión transitoria tumbaba **toda** la corrida (0 productos procesados esa hora).
+
+**Cambios en `wc_api.py`:**
+
+- Nuevo helper `_request_with_retry(method, url, max_retries=4, **kwargs)`: reintenta con backoff exponencial (1s, 2s, 4s, 8s, cap 15s) ante excepciones de conexión (`RemoteDisconnected`, `ConnectionError`, timeouts) y ante respuestas `429`/`5xx` (respeta `Retry-After` si viene). Devuelve `None` si agota los reintentos para que el llamador **salte ese item** en vez de crashear.
+- `get_products()` (enriquecimiento por-ID): cada GET pasa por el helper; si un ID falla de forma persistente se **salta** y se cuenta, y la corrida continúa con el resto. Log final `N producto(s) saltados por error de conexión`.
+- `_get()`, `update_product_status()` y `save_gtin_to_wc()` también enrutados por el helper (mismo blindaje en lecturas estándar y en los PUT de status/GTIN).
+
+**Resultado:** un cierre de conexión transitorio de WC ya no aborta el cron; en el peor caso se omiten los IDs irrecuperables de esa corrida y se reintentan en la siguiente.
+
 ### 2026-06-13 - Retry para invalid_sale_units (Pack vs UNITS_PER_PACK=1)
 
 **Problema:** ML rechazaba con `item.attribute.invalid_sale_units` cuando un producto tenía `SALE_FORMAT=Pack` (value_id `1359392`) combinado con `UNITS_PER_PACK=1` o `UNITS_PER_PACKAGE=1`. Mensaje: *"Ingresa un valor diferente a 1 porque completaste Pack en el campo Formato de venta"*. Afectó TEC-0504-NEG y otros 10+ en backlog.
